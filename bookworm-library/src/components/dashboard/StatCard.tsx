@@ -33,17 +33,17 @@ export function StatCard({
         {
           backgroundColor: colors.surface.card,
           borderColor: colors.surface.border,
-          padding: isMobile ? 14 : 20,
-          minHeight: isMobile ? 108 : 126,
+          padding: isMobile ? 16 : 22,
+          minHeight: isMobile ? 104 : 130,
         },
       ]}>
       {/* Top Header: Label & Line Icon with subtle Claymorphic circle */}
       <View style={styles.cardHeader}>
-        <Text style={[styles.label, { color: colors.text.secondary, fontSize: isMobile ? 12 : 13 }]} numberOfLines={1}>
+        <Text style={[styles.label, { color: colors.text.secondary, fontSize: isMobile ? 12.5 : 13.5 }]} numberOfLines={1}>
           {label}
         </Text>
         <View style={[styles.iconBox, { backgroundColor: isDark ? colors.surface.cardAlt : colors.surface.inset }]}>
-          <Icon size={isMobile ? 15 : 17} color={colors.brand.primary} strokeWidth={2} />
+          <Icon size={isMobile ? 16 : 18} color={colors.brand.primary} strokeWidth={2.2} />
         </View>
       </View>
 
@@ -55,7 +55,7 @@ export function StatCard({
             {
               color: colors.text.primary,
               fontFamily: Platform.OS === 'web' ? '"DM Serif Display", Lora, Georgia, serif' : 'serif',
-              fontSize: isMobile ? (value.length > 7 ? 20 : 23) : 30,
+              fontSize: isMobile ? (value.length > 7 ? 22 : 25) : 34,
             },
           ]}
           numberOfLines={1}>
@@ -71,7 +71,7 @@ export function StatCard({
       </View>
 
       {/* Subtitle / Contextual Note */}
-      <Text style={[styles.subtitle, { color: colors.text.muted, fontSize: isMobile ? 11 : 12 }]} numberOfLines={1}>
+      <Text style={[styles.subtitle, { color: colors.text.muted, fontSize: isMobile ? 11.5 : 12.5 }]} numberOfLines={1}>
         {subtitle}
       </Text>
     </View>
@@ -88,17 +88,17 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 6,
+    marginBottom: 8,
   },
   iconBox: {
-    width: 32,
-    height: 32,
-    borderRadius: 8,
+    width: 36,
+    height: 36,
+    borderRadius: 9,
     alignItems: 'center',
     justifyContent: 'center',
   },
   label: {
-    fontSize: 13,
+    fontSize: 13.5,
     fontWeight: '600',
     letterSpacing: -0.1,
   },
@@ -109,22 +109,22 @@ const styles = StyleSheet.create({
     marginVertical: 4,
   },
   value: {
-    fontSize: 30,
+    fontSize: 34,
     fontWeight: '700',
     letterSpacing: -0.5,
   },
   trendBadge: {
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 4,
+    paddingHorizontal: 7,
+    paddingVertical: 2.5,
+    borderRadius: 5,
   },
   trendText: {
-    fontSize: 10,
+    fontSize: 10.5,
     fontWeight: '700',
   },
   subtitle: {
-    fontSize: 12,
+    fontSize: 12.5,
     fontWeight: '400',
-    marginTop: 2,
+    marginTop: 4,
   },
 });

@@ -13,7 +13,6 @@ import {
   Users,
   CalendarCheck,
   Armchair,
-  Receipt,
   Plus,
   Scan,
 } from 'lucide-react-native';
@@ -290,7 +289,7 @@ export default function AdminDashboardScreen() {
                 </View>
 
                 {/* ========================================================================= */}
-                {/* 2. FOUR STATISTICS SUMMARY CARDS                                          */}
+                {/* 2. THREE KEY OVERVIEW STATISTICS CARDS                                    */}
                 {/* ========================================================================= */}
                 <View
                   style={[
@@ -326,16 +325,6 @@ export default function AdminDashboardScreen() {
                       value="32"
                       subtitle="of 180 seats · 6 reserved"
                       icon={Armchair}
-                    />
-                  </View>
-
-                  {/* Card 4: Fees collected */}
-                  <View style={[styles.statCardWrapper, isMobile && styles.statCardWrapperMobile]}>
-                    <StatCard
-                      label="Fees collected"
-                      value="₹3,42,000"
-                      subtitle="90.5% of November fees"
-                      icon={Receipt}
                     />
                   </View>
                 </View>
@@ -523,28 +512,31 @@ const styles = StyleSheet.create({
   statsGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 16,
+    gap: 18,
+    width: '100%',
   },
   statsGridDesktop: {
     flexDirection: 'row',
     flexWrap: 'nowrap',
+    gap: 18,
   },
   statsGridTablet: {
     flexDirection: 'row',
+    flexWrap: 'nowrap',
+    gap: 14,
   },
   statsGridMobile: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 10,
+    flexDirection: 'column',
+    gap: 12,
   },
   statCardWrapper: {
     flex: 1,
-    minWidth: 200,
+    minWidth: 0,
   },
   statCardWrapperMobile: {
-    width: '48%',
+    width: '100%',
     flex: undefined,
-    minWidth: 140,
+    minWidth: 0,
   },
 
   // 3. Two-Column Split Grids

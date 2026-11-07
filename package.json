@@ -1,0 +1,12 @@
+{
+  "name": "bookworm-library-workspace",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "start": "npm start --prefix bookworm-library",
+    "web": "npm run web --prefix bookworm-library",
+    "android": "npm run android --prefix bookworm-library",
+    "ios": "npm run ios --prefix bookworm-library"
+  }
+}
+
