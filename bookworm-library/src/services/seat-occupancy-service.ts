@@ -1,747 +1,85 @@
-import { RegisteredStudent, SEED_STUDENTS } from './attendance-service';
+import { supabase } from '@/lib/supabase';
 
-export type SeatOccupancyStatus =
-  | 'available'
-  | 'occupied_assigned'
-  | 'occupied_another'
-  | 'reserved'
-  | 'maintenance';
+export type SeatOccupancyStatus = 'available' | 'occupied_assigned' | 'occupied_another' | 'reserved' | 'maintenance';
+export interface AssignedStudentInfo { studentId: string; name: string; department: string; phone: string; shift: string; shiftLabel?: string; validityStart: string; validityEnd: string; validityDates?: string; planName: string; monthlyFee?: number; status: 'Assigned' | 'Enrolled' | 'Reserved' | 'Expired'; assignmentStatus?: string; avatarColor?: string }
+export interface OccupyingStudentInfo { studentId: string; name: string; department: string; phone: string; checkInTime: string; checkInDate: string; checkInEpoch: number; durationMinutes: number; durationFormatted: string; registrationMethod: 'seat_qr' | 'manual_admin' | 'kiosk_checkin' | 'attendance_sync'; verifiedGate: string; notes?: string }
+export interface SeatOccupancyItem { seatId: string; allocationId?: string; seatNumber: number; deskLabel: string; tenantId: string; status: SeatOccupancyStatus; statusLabel: string; assignedStudent?: AssignedStudentInfo; occupyingStudent?: OccupyingStudentInfo; isCrossOccupied: boolean; maintenanceReason?: string; powerSocketDrawing: boolean; readingLightOn: boolean; lastUpdated: string }
+export interface SeatOccupancyHistoryRecord { id: string; seatNumber: number; deskLabel: string; tenantId: string; date: string; assignedStudentName: string; assignedStudentId?: string; occupyingStudentName: string; occupyingStudentId: string; department: string; checkInTime: string; checkOutTime: string; durationFormatted: string; registrationMethod: string; wasCrossOccupied: boolean; notes?: string }
+export interface SeatOccupancyAuditLog { id: string; seatNumber: number; deskLabel: string; tenantId: string; action: 'manual_assign' | 'manual_release' | 'correct_record' | 'toggle_maintenance' | 'seat_qr_checkin'; actionLabel: string; performedBy: string; timestamp: string; details: string }
+export interface SeatStudentOption { id: string; student_id: string; full_name: string; phone: string; status: string; shift_id: string | null; shift_name: string | null; is_full_shift: boolean; plan_name: string; subscription_id: string | null; start_date: string | null; end_date: string | null }
+export interface SeatDashboardData { mode: 'general' | 'full_shift_reserved'; seats: SeatOccupancyItem[]; history: SeatOccupancyHistoryRecord[]; audit: SeatOccupancyAuditLog[]; students: SeatStudentOption[] }
 
-export interface AssignedStudentInfo {
-  studentId: string;
-  name: string;
-  department: string;
-  phone: string;
-  shift: string;
-  shiftLabel?: string;
-  validityStart: string;
-  validityEnd: string;
-  validityDates?: string;
-  planName: string;
-  monthlyFee?: number;
-  status: 'Assigned' | 'Enrolled' | 'Reserved' | 'Expired';
-  assignmentStatus?: string;
-  avatarColor?: string;
-}
-
-export interface OccupyingStudentInfo {
-  studentId: string;
-  name: string;
-  department: string;
-  phone: string;
-  checkInTime: string; // e.g. "09:14 AM"
-  checkInDate: string; // e.g. "06 Nov 2026"
-  checkInEpoch: number;
-  durationMinutes: number;
-  durationFormatted: string; // e.g. "2h 45m"
-  registrationMethod: 'seat_qr' | 'manual_admin' | 'kiosk_checkin' | 'attendance_sync';
-  verifiedGate: string;
-  notes?: string;
-}
-
-export interface SeatOccupancyItem {
-  seatNumber: number;
-  deskLabel: string;
-  tenantId: string;
-  status: SeatOccupancyStatus;
-  statusLabel: string;
-  assignedStudent?: AssignedStudentInfo;
-  occupyingStudent?: OccupyingStudentInfo;
-  isCrossOccupied: boolean; // Scenario 2 or 4
-  maintenanceReason?: string;
-  powerSocketDrawing: boolean;
-  readingLightOn: boolean;
-  lastUpdated: string;
-}
-
-export interface SeatOccupancyHistoryRecord {
-  id: string;
-  seatNumber: number;
-  deskLabel: string;
-  tenantId: string;
-  date: string;
-  assignedStudentName: string;
-  assignedStudentId?: string;
-  occupyingStudentName: string;
-  occupyingStudentId: string;
-  department: string;
-  checkInTime: string;
-  checkOutTime: string;
-  durationFormatted: string;
-  registrationMethod: string;
-  wasCrossOccupied: boolean;
-  notes?: string;
-}
-
-export interface SeatOccupancyAuditLog {
-  id: string;
-  seatNumber: number;
-  deskLabel: string;
-  tenantId: string;
-  action: 'manual_assign' | 'manual_release' | 'correct_record' | 'toggle_maintenance' | 'seat_qr_checkin';
-  actionLabel: string;
-  performedBy: string; // e.g. "Admin (Civil Lines)"
-  timestamp: string;
-  details: string;
-}
-
-// Format duration from epoch to now
-export function formatDuration(startEpoch: number, endEpoch?: number): string {
-  const diffMs = Math.max(0, (endEpoch || Date.now()) - startEpoch);
-  const totalMins = Math.floor(diffMs / (1000 * 60));
-  const hrs = Math.floor(totalMins / 60);
-  const mins = totalMins % 60;
-  if (hrs === 0) return `${mins}m`;
-  return `${hrs}h ${mins}m`;
-}
-
-// Format current time
-export function getFormattedTime(): string {
-  const d = new Date();
-  let hours = d.getHours();
-  const minutes = String(d.getMinutes()).padStart(2, '0');
-  const ampm = hours >= 12 ? 'PM' : 'AM';
-  hours = hours % 12 || 12;
-  return `${String(hours).padStart(2, '0')}:${minutes} ${ampm}`;
-}
-
-// Format current date
-export function getFormattedDate(): string {
-  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-  const d = new Date();
-  return `${String(d.getDate()).padStart(2, '0')} ${months[d.getMonth()]} ${d.getFullYear()}`;
-}
+const fail = (error: { message: string; code?: string } | null): void => { if (error) throw new Error(error.code === '23505' ? 'This seat or student already has an active allocation or occupancy.' : error.message); };
+const clock = (value: string | null) => value ? new Date(value).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+const date = (value: string | null) => value ? new Date(value).toLocaleDateString() : '';
+const duration = (start: string, end?: string | null) => { const n = Math.max(0, Math.floor((new Date(end || Date.now()).getTime() - new Date(start).getTime()) / 60000)); return `${Math.floor(n / 60)}h ${n % 60}m`; };
 
 class SeatOccupancyService {
-  private occupancyStore: Record<string, Record<number, SeatOccupancyItem>> = {};
-  private historyStore: Record<string, SeatOccupancyHistoryRecord[]> = {};
-  private auditStore: Record<string, SeatOccupancyAuditLog[]> = {};
-
-  constructor() {
-    this.initializeTenantSeeds('bookworm-main');
-    this.initializeTenantSeeds('apex-study');
-    this.initializeTenantSeeds('scholars-den');
-  }
-
-  // Pre-seed realistic multi-tenant data supporting all 4 core scenarios
-  private initializeTenantSeeds(tenantId: string) {
-    if (!this.occupancyStore[tenantId]) {
-      this.occupancyStore[tenantId] = {};
-    }
-    if (!this.historyStore[tenantId]) {
-      this.historyStore[tenantId] = [];
-    }
-    if (!this.auditStore[tenantId]) {
-      this.auditStore[tenantId] = [];
-    }
-
-    const now = Date.now();
-    const studentsPool = SEED_STUDENTS.filter((s) => s.tenantId === tenantId);
-    const pool = studentsPool.length > 0 ? studentsPool : SEED_STUDENTS;
-
-    // We seed 150 desks per tenant
-    for (let num = 1; num <= 150; num++) {
-      const padded = num < 10 ? `0${num}` : `${num}`;
-      const deskLabel = `D-${padded}`;
-
-      // Assign student for ~75% of desks
-      let assignedStudent: AssignedStudentInfo | undefined;
-      const hasAssignment = (num * 3 + 1) % 10 > 2;
-
-      if (hasAssignment) {
-        const studentIndex = (num * 2) % pool.length;
-        const student = pool[studentIndex];
-        assignedStudent = {
-          studentId: student.id,
-          name: student.name,
-          department: student.department || 'General Studies',
-          phone: student.phone || '+91 98765 43210',
-          shift: num % 3 === 0 ? 'Full Day (24/7)' : num % 2 === 0 ? 'Evening Shift' : 'Morning Shift',
-          validityStart: '01 Nov 2026',
-          validityEnd: '30 Nov 2026',
-          planName: num <= 50 ? 'Exclusive Reserve' : num <= 80 ? 'Premium Focus' : 'Classic Study',
-          status: 'Enrolled',
-        };
-      }
-
-      // -----------------------------------------------------------------------
-      // SCENARIO 1: Assigned Student Occupies Their Own Seat
-      // e.g. Desk 1, 3, 7, 13, 21...
-      // -----------------------------------------------------------------------
-      if (assignedStudent && (num % 5 === 1 || num % 5 === 3)) {
-        const checkInEpoch = now - (num * 17 * 60 * 1000 + 45 * 60 * 1000);
-        this.occupancyStore[tenantId][num] = {
-          seatNumber: num,
-          deskLabel,
-          tenantId,
-          status: 'occupied_assigned',
-          statusLabel: 'Occupied by Assigned Student',
-          assignedStudent,
-          occupyingStudent: {
-            studentId: assignedStudent.studentId,
-            name: assignedStudent.name,
-            department: assignedStudent.department,
-            phone: assignedStudent.phone,
-            checkInTime: '08:15 AM',
-            checkInDate: getFormattedDate(),
-            checkInEpoch,
-            durationMinutes: Math.floor((now - checkInEpoch) / 60000),
-            durationFormatted: formatDuration(checkInEpoch, now),
-            registrationMethod: 'seat_qr',
-            verifiedGate: 'Gate 1 Turnstile QR',
-            notes: 'Verified scan at desk QR stand.',
-          },
-          isCrossOccupied: false,
-          powerSocketDrawing: true,
-          readingLightOn: true,
-          lastUpdated: 'Just now',
-        };
-        continue;
-      }
-
-      // -----------------------------------------------------------------------
-      // SCENARIO 2: Another Student Occupies the Seat (Cross-Seat Mismatch!)
-      // Assigned: Rahul, Occupying: Amit
-      // e.g. Desk 4, 9, 14, 19, 24...
-      // -----------------------------------------------------------------------
-      if (num % 5 === 4) {
-        const otherStudentIndex = (num * 3 + 2) % pool.length;
-        const otherStudent = pool[otherStudentIndex];
-        const checkInEpoch = now - (num * 12 * 60 * 1000 + 30 * 60 * 1000);
-
-        this.occupancyStore[tenantId][num] = {
-          seatNumber: num,
-          deskLabel,
-          tenantId,
-          status: 'occupied_another',
-          statusLabel: 'Occupied by Another Student',
-          assignedStudent, // Original enrolled student is fully preserved!
-          occupyingStudent: {
-            studentId: otherStudent.id,
-            name: otherStudent.name,
-            department: otherStudent.department,
-            phone: otherStudent.phone,
-            checkInTime: '10:14 AM',
-            checkInDate: getFormattedDate(),
-            checkInEpoch,
-            durationMinutes: Math.floor((now - checkInEpoch) / 60000),
-            durationFormatted: formatDuration(checkInEpoch, now),
-            registrationMethod: 'seat_qr',
-            verifiedGate: 'Main Library Gate 1',
-            notes: assignedStudent
-              ? `Officially assigned to ${assignedStudent.name}, but ${otherStudent.name} is seated here.`
-              : `Unassigned seat occupied by ${otherStudent.name}.`,
-          },
-          isCrossOccupied: true,
-          powerSocketDrawing: true,
-          readingLightOn: true,
-          lastUpdated: '2 mins ago',
-        };
-        continue;
-      }
-
-      // -----------------------------------------------------------------------
-      // SCENARIO 3: Assigned Student is Absent (Vacant)
-      // Assigned: Rahul, Occupying: Nobody
-      // e.g. Desk 2, 8, 12, 18, 22...
-      // -----------------------------------------------------------------------
-      if (assignedStudent && (num % 5 === 2 || num % 5 === 0)) {
-        this.occupancyStore[tenantId][num] = {
-          seatNumber: num,
-          deskLabel,
-          tenantId,
-          status: 'available',
-          statusLabel: 'Available (Assigned Student Absent)',
-          assignedStudent, // Rahul's enrolment remains visible!
-          occupyingStudent: undefined,
-          isCrossOccupied: false,
-          powerSocketDrawing: false,
-          readingLightOn: false,
-          lastUpdated: '06:00 AM',
-        };
-        continue;
-      }
-
-      // Maintenance or Reserved desks
-      if (num === 50 || num === 100) {
-        this.occupancyStore[tenantId][num] = {
-          seatNumber: num,
-          deskLabel,
-          tenantId,
-          status: 'maintenance',
-          statusLabel: 'Maintenance / Blocked',
-          assignedStudent: undefined,
-          occupyingStudent: undefined,
-          isCrossOccupied: false,
-          maintenanceReason: 'Electrical socket inspection & desk surface repainting',
-          powerSocketDrawing: false,
-          readingLightOn: false,
-          lastUpdated: '08:00 AM',
-        };
-        continue;
-      }
-
-      // Default Available Desk
-      this.occupancyStore[tenantId][num] = {
-        seatNumber: num,
-        deskLabel,
-        tenantId,
-        status: 'available',
-        statusLabel: 'Available',
-        assignedStudent: undefined,
-        occupyingStudent: undefined,
-        isCrossOccupied: false,
-        powerSocketDrawing: false,
-        readingLightOn: false,
-        lastUpdated: '06:00 AM',
+  async getDashboard(libraryId: string): Promise<SeatDashboardData> {
+    const [lib, seatsRes, allocationsRes, attendanceRes, shiftsRes, studentsRes, plansRes, subsRes, auditRes] = await Promise.all([
+      supabase.from('libraries').select('seating_mode').eq('id', libraryId).single(),
+      supabase.from('seats').select('id, seat_number, row_label, has_power_socket, has_locker').eq('library_id', libraryId).eq('is_active', true).order('seat_number'),
+      supabase.from('seat_allocations').select('id, seat_id, student_id, shift_id, subscription_id, allocated_from, allocated_to, status, students!inner(id,student_id,full_name,phone), shifts!inner(id,name,is_full_shift)').eq('library_id', libraryId).eq('status', 'active'),
+      supabase.from('attendance').select('id, seat_id, student_id, check_in_at, check_out_at, status, students!inner(id,student_id,full_name,phone)').eq('library_id', libraryId).order('check_in_at', { ascending: false }),
+      supabase.from('shifts').select('id,name,is_full_shift').eq('library_id', libraryId).eq('is_active', true),
+      supabase.from('students').select('id,student_id,full_name,phone,status').eq('library_id', libraryId).eq('status', 'active').eq('application_status', 'approved').order('full_name'),
+      supabase.from('membership_plans').select('id,name,shift_id').eq('library_id', libraryId),
+      supabase.from('membership_subscriptions').select('student_id,plan_id,start_date,end_date,status').eq('library_id', libraryId).eq('status', 'active'),
+      supabase.from('attendance_audit_logs').select('id,attendance_id,action,reason,created_at,performed_by,attendance!inner(seat_id,seats!inner(seat_number, row_label))').eq('library_id', libraryId).order('created_at', { ascending: false }).limit(200),
+    ]);
+    [lib.error,seatsRes.error,allocationsRes.error,attendanceRes.error,shiftsRes.error,studentsRes.error,plansRes.error,subsRes.error,auditRes.error].forEach(fail);
+    const allocations = allocationsRes.data || [], visits = attendanceRes.data || [];
+    const activeVisits = visits.filter((v: any) => !v.check_out_at);
+    const shiftById = new Map((shiftsRes.data || []).map((x: any) => [x.id, x]));
+    const planById = new Map((plansRes.data || []).map((x: any) => [x.id, x]));
+    const subscriptionByStudent = new Map((subsRes.data || []).map((x: any) => [x.student_id, x]));
+    const seats: SeatOccupancyItem[] = (seatsRes.data || []).map((seat: any) => {
+      const allocation: any = allocations.find((a: any) => a.seat_id === seat.id);
+      const visit: any = activeVisits.find((v: any) => v.seat_id === seat.id);
+      const assigned = allocation?.students;
+      const occupying = visit?.students;
+      const shift: any = allocation && shiftById.get(allocation.shift_id);
+      const plan: any = allocation?.subscription_id && planById.get((subscriptionByStudent.get(allocation.student_id) as any)?.plan_id);
+      return {
+        seatId: seat.id, allocationId: allocation?.id, seatNumber: Number.parseInt(seat.seat_number.replace(/\D/g, ''), 10) || 0, deskLabel: seat.seat_number, tenantId: libraryId,
+        status: visit ? (allocation?.student_id === visit.student_id ? 'occupied_assigned' : 'occupied_another') : allocation ? 'reserved' : 'available',
+        statusLabel: visit ? 'Occupied' : allocation ? 'Reserved for full shift' : 'Available',
+        assignedStudent: assigned ? { studentId: assigned.student_id, name: assigned.full_name, department: '', phone: assigned.phone || '', shift: shift?.name || '', shiftLabel: shift?.name || '', validityStart: allocation.allocated_from, validityEnd: allocation.allocated_to, validityDates: `${allocation.allocated_from} – ${allocation.allocated_to}`, planName: plan?.name || 'Active plan', status: 'Assigned', assignmentStatus: allocation.status } : undefined,
+        occupyingStudent: occupying ? { studentId: occupying.student_id, name: occupying.full_name, department: '', phone: occupying.phone || '', checkInTime: clock(visit.check_in_at), checkInDate: date(visit.check_in_at), checkInEpoch: new Date(visit.check_in_at).getTime(), durationMinutes: Math.floor((Date.now() - new Date(visit.check_in_at).getTime()) / 60000), durationFormatted: duration(visit.check_in_at), registrationMethod: 'attendance_sync', verifiedGate: 'Attendance', notes: '' } : undefined,
+        isCrossOccupied: Boolean(visit && allocation && allocation.student_id !== visit.student_id), powerSocketDrawing: Boolean(seat.has_power_socket && visit), readingLightOn: Boolean(seat.has_power_socket && visit), lastUpdated: visit ? clock(visit.check_in_at) : '',
       };
-    }
-
-    // Seed historical occupancy sessions
-    this.historyStore[tenantId] = [
-      {
-        id: 'hist-1',
-        seatNumber: 4,
-        deskLabel: 'D-04',
-        tenantId,
-        date: getFormattedDate(),
-        assignedStudentName: 'Rohan Verma',
-        assignedStudentId: 'BW-2026-0014',
-        occupyingStudentName: 'Aarav Patel',
-        occupyingStudentId: 'BW-2026-0021',
-        department: 'Engineering / GATE',
-        checkInTime: '06:15 AM',
-        checkOutTime: '09:45 AM',
-        durationFormatted: '3h 30m',
-        registrationMethod: 'Seat QR Code Stand',
-        wasCrossOccupied: true,
-        notes: 'Temporary occupancy while assigned desk D-02 was undergoing repair.',
-      },
-      {
-        id: 'hist-2',
-        seatNumber: 1,
-        deskLabel: 'D-01',
-        tenantId,
-        date: getFormattedDate(),
-        assignedStudentName: 'Rohan Verma',
-        assignedStudentId: 'BW-2026-0014',
-        occupyingStudentName: 'Rohan Verma',
-        occupyingStudentId: 'BW-2026-0014',
-        department: 'UPSC Civil Services',
-        checkInTime: '06:00 AM',
-        checkOutTime: '08:00 AM',
-        durationFormatted: '2h 00m',
-        registrationMethod: 'Seat QR Code Stand',
-        wasCrossOccupied: false,
-      },
-      {
-        id: 'hist-3',
-        seatNumber: 14,
-        deskLabel: 'D-14',
-        tenantId,
-        date: '05 Nov 2026',
-        assignedStudentName: 'Sneha Kulkarni',
-        assignedStudentId: 'BW-2026-0056',
-        occupyingStudentName: 'Kunal Deshmukh',
-        occupyingStudentId: 'BW-2026-0099',
-        department: 'CA / Commerce',
-        checkInTime: '02:00 PM',
-        checkOutTime: '06:30 PM',
-        durationFormatted: '4h 30m',
-        registrationMethod: 'Admin Manual Check-in',
-        wasCrossOccupied: true,
-        notes: 'Assigned student permitted peer to use seat for evening mock test.',
-      },
-    ];
-
-    // Seed audit logs
-    this.auditStore[tenantId] = [
-      {
-        id: 'audit-1',
-        seatNumber: 4,
-        deskLabel: 'D-04',
-        tenantId,
-        action: 'seat_qr_checkin',
-        actionLabel: 'Student QR Scan',
-        performedBy: 'Aarav Patel (STU-BW-0021)',
-        timestamp: '10:14 AM, Today',
-        details: 'Scanned desk stand QR. Flagged as cross-occupancy (assigned to Rohan Verma).',
-      },
-      {
-        id: 'audit-2',
-        seatNumber: 14,
-        deskLabel: 'D-14',
-        tenantId,
-        action: 'manual_assign',
-        actionLabel: 'Manual Admin Assignment',
-        performedBy: 'Admin (Civil Lines Branch)',
-        timestamp: '02:00 PM, Yesterday',
-        details: 'Manually authorized Kunal Deshmukh to sit at D-14 for mock test session.',
-      },
-    ];
-  }
-
-  // ---------------------------------------------------------------------------
-  // 1. READ METHODS
-  // ---------------------------------------------------------------------------
-  public getSeat(tenantId: string, seatNumber: number): SeatOccupancyItem | undefined {
-    this.ensureTenant(tenantId);
-    return this.occupancyStore[tenantId]?.[seatNumber];
-  }
-
-  public getAllSeats(tenantId: string): Record<number, SeatOccupancyItem> {
-    this.ensureTenant(tenantId);
-    return this.occupancyStore[tenantId] || {};
-  }
-
-  public getHistory(tenantId: string, seatNumber?: number): SeatOccupancyHistoryRecord[] {
-    this.ensureTenant(tenantId);
-    const list = this.historyStore[tenantId] || [];
-    if (seatNumber) {
-      return list.filter((item) => item.seatNumber === seatNumber);
-    }
-    return list;
-  }
-
-  public getAuditLogs(tenantId: string, seatNumber?: number): SeatOccupancyAuditLog[] {
-    this.ensureTenant(tenantId);
-    const list = this.auditStore[tenantId] || [];
-    if (seatNumber) {
-      return list.filter((item) => item.seatNumber === seatNumber);
-    }
-    return list;
-  }
-
-  public getSeatHistory(tenantId: string, seatNumber: number): SeatOccupancyHistoryRecord[] {
-    return this.getHistory(tenantId, seatNumber);
-  }
-
-  public getSeatAuditLogs(tenantId: string, seatNumber: number): SeatOccupancyAuditLog[] {
-    return this.getAuditLogs(tenantId, seatNumber);
-  }
-
-  // Analytics on frequently cross-occupied seats
-  public getCrossSeatAnalytics(tenantId: string) {
-    this.ensureTenant(tenantId);
-    const history = this.historyStore[tenantId] || [];
-    const counts: Record<number, number> = {};
-
-    history.forEach((h) => {
-      if (h.wasCrossOccupied) {
-        counts[h.seatNumber] = (counts[h.seatNumber] || 0) + 1;
-      }
     });
-
-    return Object.entries(counts)
-      .map(([seatNo, count]) => ({
-        seatNumber: Number(seatNo),
-        deskLabel: `D-${Number(seatNo) < 10 ? '0' : ''}${seatNo}`,
-        mismatchCount: count,
-      }))
-      .sort((a, b) => b.mismatchCount - a.mismatchCount);
-  }
-
-  // ---------------------------------------------------------------------------
-  // 2. MUTATION & ACTION METHODS (ENFORCING BUSINESS RULES)
-  // ---------------------------------------------------------------------------
-
-  /**
-   * Manually assign an occupant to a seat.
-   * Business Rules:
-   * 1. If this student is currently occupying another seat in this library, release it first!
-   * 2. If seat is already occupied by someone else, end their session and archive to history.
-   * 3. Do NOT overwrite assigned student info.
-   * 4. Record in audit log.
-   */
-  public manuallyAssignOccupant(
-    tenantId: string,
-    seatNumber: number,
-    student: { studentId: string; name: string; department?: string; phone?: string },
-    performedBy: string = 'Admin',
-    notes?: string
-  ): { success: boolean; message: string; seat: SeatOccupancyItem } {
-    this.ensureTenant(tenantId);
-    const seats = this.occupancyStore[tenantId];
-    const targetSeat = seats[seatNumber];
-    if (!targetSeat) {
-      throw new Error(`Desk ${seatNumber} not found.`);
-    }
-
-    // Rule 1: Prevent one student from occupying multiple seats simultaneously
-    for (const [sNoStr, sItem] of Object.entries(seats)) {
-      const sNo = Number(sNoStr);
-      if (sNo !== seatNumber && sItem.occupyingStudent?.studentId === student.studentId) {
-        // Automatically release old seat
-        this.releaseSeat(
-          tenantId,
-          sNo,
-          performedBy,
-          `Auto-released: Student moved to Desk ${targetSeat.deskLabel}`
-        );
-      }
-    }
-
-    // Rule 2: If target seat was already occupied, end previous session
-    if (targetSeat.occupyingStudent) {
-      this.archiveToHistory(tenantId, targetSeat, 'New occupant assigned by admin');
-    }
-
-    const now = Date.now();
-    const isAssignedSame = targetSeat.assignedStudent?.studentId === student.studentId;
-    const isCross = !isAssignedSame;
-
-    const occupyingStudent: OccupyingStudentInfo = {
-      studentId: student.studentId,
-      name: student.name,
-      department: student.department || 'General Library',
-      phone: student.phone || '+91 98765 43210',
-      checkInTime: getFormattedTime(),
-      checkInDate: getFormattedDate(),
-      checkInEpoch: now,
-      durationMinutes: 0,
-      durationFormatted: 'Just now',
-      registrationMethod: 'manual_admin',
-      verifiedGate: 'Admin Console Desk Allocation',
-      notes: notes || (isCross ? 'Assigned by admin to non-allocated seat.' : 'Admin confirmed check-in.'),
-    };
-
-    targetSeat.occupyingStudent = occupyingStudent;
-    targetSeat.isCrossOccupied = isCross;
-    targetSeat.status = isCross ? 'occupied_another' : 'occupied_assigned';
-    targetSeat.statusLabel = isCross ? 'Occupied by Another Student' : 'Occupied by Assigned Student';
-    targetSeat.powerSocketDrawing = true;
-    targetSeat.readingLightOn = true;
-    targetSeat.lastUpdated = 'Just now';
-
-    // Log Audit
-    this.addAuditLog(tenantId, {
-      seatNumber,
-      deskLabel: targetSeat.deskLabel,
-      action: 'manual_assign',
-      actionLabel: 'Manual Seat Assignment',
-      performedBy,
-      details: `${student.name} (${student.studentId}) assigned as current occupant.${isCross ? ' Flagged as cross-occupancy.' : ''}`,
+    const histories: SeatOccupancyHistoryRecord[] = visits.filter((v: any) => v.check_out_at && v.seat_id).map((v: any) => {
+      const seat: any = (seatsRes.data || []).find((s: any) => s.id === v.seat_id);
+      const alloc: any = allocations.find((a: any) => a.seat_id === v.seat_id && a.student_id === v.student_id);
+      return { id: v.id, seatNumber: seat ? Number.parseInt(seat.seat_number.replace(/\D/g, ''), 10) || 0 : 0, deskLabel: seat?.seat_number || '', tenantId: libraryId, date: date(v.check_in_at), assignedStudentName: alloc?.students?.full_name || 'Unassigned', assignedStudentId: alloc?.students?.student_id, occupyingStudentName: v.students.full_name, occupyingStudentId: v.students.student_id, department: '', checkInTime: clock(v.check_in_at), checkOutTime: clock(v.check_out_at), durationFormatted: duration(v.check_in_at,v.check_out_at), registrationMethod: 'Attendance', wasCrossOccupied: Boolean(alloc && alloc.student_id !== v.student_id) };
     });
-
-    return {
-      success: true,
-      message: `Occupancy registered: ${student.name} is now seated at ${targetSeat.deskLabel}.`,
-      seat: targetSeat,
-    };
+    const audit: SeatOccupancyAuditLog[] = (auditRes.data || []).map((a: any) => { const seat = a.attendance?.seats; return { id: a.id, seatNumber: Number.parseInt(seat?.seat_number?.replace(/\D/g, ''), 10) || 0, deskLabel: seat?.seat_number || '', tenantId: libraryId, action: a.action === 'seat_correction' ? 'correct_record' : 'manual_release', actionLabel: a.action, performedBy: a.performed_by || 'Staff', timestamp: new Date(a.created_at).toLocaleString(), details: a.reason }; });
+    const students: SeatStudentOption[] = (studentsRes.data || []).map((s: any) => { const sub: any = subscriptionByStudent.get(s.id); const plan: any = sub && planById.get(sub.plan_id); const shift: any = plan && shiftById.get(plan.shift_id); return { ...s, shift_id: shift?.id || null, shift_name: shift?.name || null, is_full_shift: Boolean(shift?.is_full_shift), plan_name: plan?.name || '', subscription_id: sub?.id || null, start_date: sub?.start_date || null, end_date: sub?.end_date || null }; });
+    return { mode: lib.data!.seating_mode, seats, history: histories, audit, students };
   }
 
-  /**
-   * Release seat manually (Check-out / Vacate).
-   * Business Rules:
-   * 1. Preserves historical session record with duration and timestamps.
-   * 2. Preserves assigned student information.
-   * 3. Sets seat status to Available (or Reserved if assigned student has reserved pass).
-   * 4. Logs audit entry.
-   */
-  public releaseSeat(
-    tenantId: string,
-    seatNumber: number,
-    performedBy: string = 'Admin',
-    reason: string = 'Desk vacated'
-  ): { success: boolean; message: string; seat: SeatOccupancyItem } {
-    this.ensureTenant(tenantId);
-    const targetSeat = this.occupancyStore[tenantId]?.[seatNumber];
-    if (!targetSeat) {
-      throw new Error(`Desk ${seatNumber} not found.`);
-    }
-
-    if (targetSeat.occupyingStudent) {
-      this.archiveToHistory(tenantId, targetSeat, reason);
-    }
-
-    const previousOccupantName = targetSeat.occupyingStudent?.name || 'Occupant';
-    targetSeat.occupyingStudent = undefined;
-    targetSeat.isCrossOccupied = false;
-    targetSeat.status = 'available';
-    targetSeat.statusLabel = targetSeat.assignedStudent ? 'Available (Assigned Student Absent)' : 'Available';
-    targetSeat.powerSocketDrawing = false;
-    targetSeat.readingLightOn = false;
-    targetSeat.lastUpdated = 'Just now';
-
-    // Log Audit
-    this.addAuditLog(tenantId, {
-      seatNumber,
-      deskLabel: targetSeat.deskLabel,
-      action: 'manual_release',
-      actionLabel: 'Desk Released',
-      performedBy,
-      details: `${previousOccupantName} checked out from ${targetSeat.deskLabel}. Reason: ${reason}.`,
-    });
-
-    return {
-      success: true,
-      message: `${targetSeat.deskLabel} is now vacant. Session archived to history.`,
-      seat: targetSeat,
-    };
+  async assignSeat(libraryId: string, seatId: string, studentId: string, shiftId: string, fullShift: boolean, startDate: string, endDate: string, subscriptionId?: string | null) {
+    if (!fullShift) throw new Error('Permanent seat allocations are reserved for full-shift students.');
+    const { error } = await supabase.from('seat_allocations').insert({ library_id: libraryId, seat_id: seatId, student_id: studentId, shift_id: shiftId, subscription_id: subscriptionId || null, allocated_from: startDate, allocated_to: endDate, status: 'active' });
+    fail(error);
   }
-
-  /**
-   * Correct an incorrect occupancy record (Quick Swap or Identity Correction)
-   */
-  public correctOccupancy(
-    tenantId: string,
-    seatNumber: number,
-    newStudent: { studentId: string; name: string; department?: string; phone?: string },
-    performedBy: string = 'Admin',
-    notes: string = 'Identity corrected by admin'
-  ): { success: boolean; message: string; seat: SeatOccupancyItem } {
-    this.ensureTenant(tenantId);
-    const targetSeat = this.occupancyStore[tenantId]?.[seatNumber];
-    if (!targetSeat) throw new Error(`Desk ${seatNumber} not found.`);
-
-    const oldName = targetSeat.occupyingStudent?.name || 'Previous';
-    const isAssignedSame = targetSeat.assignedStudent?.studentId === newStudent.studentId;
-    const isCross = !isAssignedSame;
-
-    if (targetSeat.occupyingStudent) {
-      targetSeat.occupyingStudent.studentId = newStudent.studentId;
-      targetSeat.occupyingStudent.name = newStudent.name;
-      targetSeat.occupyingStudent.department = newStudent.department || targetSeat.occupyingStudent.department;
-      targetSeat.occupyingStudent.phone = newStudent.phone || targetSeat.occupyingStudent.phone;
-      targetSeat.occupyingStudent.notes = notes;
-    } else {
-      return this.manuallyAssignOccupant(tenantId, seatNumber, newStudent, performedBy, notes);
-    }
-
-    targetSeat.isCrossOccupied = isCross;
-    targetSeat.status = isCross ? 'occupied_another' : 'occupied_assigned';
-    targetSeat.statusLabel = isCross ? 'Occupied by Another Student' : 'Occupied by Assigned Student';
-    targetSeat.lastUpdated = 'Just now';
-
-    this.addAuditLog(tenantId, {
-      seatNumber,
-      deskLabel: targetSeat.deskLabel,
-      action: 'correct_record',
-      actionLabel: 'Occupancy Record Corrected',
-      performedBy,
-      details: `Replaced occupant record from ${oldName} to ${newStudent.name}.`,
-    });
-
-    return {
-      success: true,
-      message: `Record corrected for ${targetSeat.deskLabel}: ${newStudent.name} is verified occupant.`,
-      seat: targetSeat,
-    };
+  async vacateAllocation(libraryId: string, allocationId: string) {
+    const { data, error } = await supabase.from('seat_allocations').update({ status: 'vacated' }).eq('library_id', libraryId).eq('id', allocationId).eq('status', 'active').select('id').maybeSingle();
+    fail(error); if (!data) throw new Error('Active permanent seat allocation was not found.');
   }
-
-  /**
-   * Toggle maintenance status on desk
-   */
-  public toggleMaintenance(
-    tenantId: string,
-    seatNumber: number,
-    isMaintenance: boolean,
-    reason: string = 'Scheduled cleaning / electrical maintenance',
-    performedBy: string = 'Admin'
-  ) {
-    this.ensureTenant(tenantId);
-    const targetSeat = this.occupancyStore[tenantId]?.[seatNumber];
-    if (!targetSeat) return;
-
-    if (isMaintenance && targetSeat.occupyingStudent) {
-      this.releaseSeat(tenantId, seatNumber, performedBy, 'Desk placed under maintenance');
-    }
-
-    targetSeat.status = isMaintenance ? 'maintenance' : 'available';
-    targetSeat.statusLabel = isMaintenance ? 'Maintenance / Blocked' : 'Available';
-    targetSeat.maintenanceReason = isMaintenance ? reason : undefined;
-    targetSeat.lastUpdated = 'Just now';
-
-    this.addAuditLog(tenantId, {
-      seatNumber,
-      deskLabel: targetSeat.deskLabel,
-      action: 'toggle_maintenance',
-      actionLabel: isMaintenance ? 'Set to Maintenance' : 'Cleared Maintenance',
-      performedBy,
-      details: isMaintenance ? `Desk blocked: ${reason}` : 'Desk restored to active pool.',
-    });
+  async occupySeat(libraryId: string, seatId: string, studentId: string, mode: 'general' | 'full_shift_reserved', fullShift: boolean) {
+    if (mode === 'general') { const { error } = await supabase.from('attendance').insert({ library_id: libraryId, student_id: studentId, seat_id: null }); fail(error); return; }
+    if (fullShift) { const { data, error } = await supabase.from('seat_allocations').select('id').eq('library_id', libraryId).eq('seat_id', seatId).eq('student_id', studentId).eq('status', 'active').maybeSingle(); fail(error); if (!data) throw new Error('Full-shift students must occupy their permanently allocated seat.'); }
+    else { const { data, error } = await supabase.from('seat_allocations').select('id').eq('library_id', libraryId).eq('seat_id', seatId).eq('status', 'active').maybeSingle(); fail(error); if (data) throw new Error('This seat is reserved for a full-shift student, including while they are absent.'); }
+    const { error } = await supabase.from('attendance').insert({ library_id: libraryId, student_id: studentId, seat_id: seatId }); fail(error);
   }
-
-  /**
-   * Register seat occupancy via QR code scan (Student or Kiosk scan)
-   */
-  public registerSeatQRScan(
-    tenantId: string,
-    seatNumber: number,
-    student: { id: string; name: string; department?: string; phone?: string }
-  ): { success: boolean; message: string; seat: SeatOccupancyItem } {
-    return this.manuallyAssignOccupant(
-      tenantId,
-      seatNumber,
-      {
-        studentId: student.id,
-        name: student.name,
-        department: student.department,
-        phone: student.phone,
-      },
-      `${student.name} (QR Scanner)`,
-      'Scanned physical seat stand QR code.'
-    );
-  }
-
-  // ---------------------------------------------------------------------------
-  // 3. PRIVATE HELPERS
-  // ---------------------------------------------------------------------------
-  private archiveToHistory(tenantId: string, seat: SeatOccupancyItem, reason: string) {
-    if (!seat.occupyingStudent) return;
-    const now = Date.now();
-    const durationFormatted = formatDuration(seat.occupyingStudent.checkInEpoch, now);
-
-    const record: SeatOccupancyHistoryRecord = {
-      id: `hist_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
-      seatNumber: seat.seatNumber,
-      deskLabel: seat.deskLabel,
-      tenantId,
-      date: seat.occupyingStudent.checkInDate || getFormattedDate(),
-      assignedStudentName: seat.assignedStudent?.name || 'Unassigned',
-      assignedStudentId: seat.assignedStudent?.studentId,
-      occupyingStudentName: seat.occupyingStudent.name,
-      occupyingStudentId: seat.occupyingStudent.studentId,
-      department: seat.occupyingStudent.department,
-      checkInTime: seat.occupyingStudent.checkInTime,
-      checkOutTime: getFormattedTime(),
-      durationFormatted,
-      registrationMethod:
-        seat.occupyingStudent.registrationMethod === 'seat_qr'
-          ? 'Seat QR Code Stand'
-          : 'Manual Admin Assignment',
-      wasCrossOccupied: seat.isCrossOccupied,
-      notes: reason,
-    };
-
-    if (!this.historyStore[tenantId]) {
-      this.historyStore[tenantId] = [];
-    }
-    this.historyStore[tenantId].unshift(record);
-  }
-
-  private addAuditLog(
-    tenantId: string,
-    log: Omit<SeatOccupancyAuditLog, 'id' | 'timestamp' | 'tenantId'>
-  ) {
-    if (!this.auditStore[tenantId]) {
-      this.auditStore[tenantId] = [];
-    }
-    const fullLog: SeatOccupancyAuditLog = {
-      tenantId,
-      ...log,
-      id: `audit_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
-      timestamp: `${getFormattedTime()}, ${getFormattedDate()}`,
-    };
-    this.auditStore[tenantId].unshift(fullLog);
-  }
-
-  private ensureTenant(tenantId: string) {
-    if (!this.occupancyStore[tenantId]) {
-      this.initializeTenantSeeds(tenantId);
-    }
+  async releaseSeat(libraryId: string, seatId: string, actorId: string, reason: string) {
+    const { data, error } = await supabase.from('attendance').update({ check_out_at: new Date().toISOString(), check_out_method: 'admin', status: 'admin_closed', closed_by: actorId, closure_reason: reason }).eq('library_id', libraryId).eq('seat_id', seatId).is('check_out_at', null).select('id').maybeSingle();
+    fail(error); if (!data) throw new Error('No current occupant was found for this seat.');
+    const { error: auditError } = await supabase.from('attendance_audit_logs').insert({ library_id: libraryId, attendance_id: data.id, action: 'admin_close', performed_by: actorId, reason });
+    fail(auditError);
   }
 }
 
 export const seatOccupancyService = new SeatOccupancyService();
-

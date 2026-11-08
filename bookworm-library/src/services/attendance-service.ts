@@ -1,5 +1,4 @@
 import { LibraryTenant, DEFAULT_TENANT } from '@/constants/tenants';
-import { seatOccupancyService } from './seat-occupancy-service';
 
 export type AttendanceMode = 'static' | 'dynamic';
 export type AttendancePolicy = 'once_per_day' | 'once_per_session' | 'every_visit';
@@ -666,27 +665,10 @@ class AttendanceService {
       activeVisit.durationMinutes = diffMinutes;
       activeVisit.status = 'checked_out';
 
-      // Real-time integration: Automatically release any occupied seat for this student upon departure
-      try {
-        const allSeats = seatOccupancyService.getAllSeats(tenantId);
-        for (const [seatNo, seatItem] of Object.entries(allSeats)) {
-          if (seatItem.occupyingStudent?.studentId === studentId) {
-            seatOccupancyService.releaseSeat(
-              tenantId,
-              Number(seatNo),
-              `${student.name} (Library Exit Turnstile)`,
-              'Automatic departure check-out via attendance scanner'
-            );
-          }
-        }
-      } catch (err) {
-        console.warn('Seat auto-release error on checkout:', err);
-      }
-
       return {
         success: true,
         action: 'check_out',
-        message: `Check-out recorded successfully! Visit duration: ${Math.floor(diffMinutes / 60)}h ${diffMinutes % 60}m. Occupied seat released.`,
+        message: `Check-out recorded successfully! Visit duration: ${Math.floor(diffMinutes / 60)}h ${diffMinutes % 60}m.`,
         record: { ...activeVisit },
       };
     }
