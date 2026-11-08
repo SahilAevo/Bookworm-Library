@@ -69,7 +69,7 @@ import {
   SeatOccupancyHistoryRecord,
   SeatOccupancyAuditLog,
 } from '@/services/seat-occupancy-service';
-import { SEED_STUDENTS } from '@/services/attendance-service';
+import { useAuth } from '@/context/AuthContext';
 
 export type SeatCategory = 'exclusive' | 'premium' | 'classic' | string;
 export type ShiftType = 'morning' | 'evening' | 'night' | 'fullday' | string;
@@ -169,24 +169,6 @@ export interface LiveSeatTrackingData {
 }
 
 // Realistic student pool
-const sampleStudentNames = [
-  'Aarav Patel',
-  'Priya Sharma',
-  'Rohan Verma',
-  'Sneha Kulkarni',
-  'Vikram Mehta',
-  'Ananya Iyer',
-  'Kabir Das',
-  'Neha Gupta',
-  'Arjun Reddy',
-  'Pooja Vishwakarma',
-  'Aditya Singh',
-  'Meera Nair',
-  'Kunal Deshmukh',
-  'Tanvi Joshi',
-  'Devendra Rathore',
-  'Simran Kaur',
-];
 
 // Status Colors defined by user:
 // - Dark forest green (#245C48): Occupied
@@ -265,183 +247,8 @@ export const OCCUPANCY_STATUS_STYLES: Record<
   },
 };
 
-// Generates realistic real-time desk tracking & cross-seating data
-export function buildInitialLiveTrackingMap(seats: SeatItem[]): Record<number, LiveSeatTrackingData> {
-  const map: Record<number, LiveSeatTrackingData> = {};
-
-  seats.forEach((seat) => {
-    const num = seat.number;
-
-    // SCENARIO 1: CROSS-DESK OCCUPANCY (Desk Mismatch Alert!)
-    // Student assigned to another desk is currently sitting here.
-    // We intentionally seed desks where (num % 5 === 4) e.g., D-04, D-09, D-14, D-19, etc.
-    if (num % 5 === 4) {
-      const assignedDeskNum = ((num + 14) % 150) + 1;
-      const assignedPadded = assignedDeskNum < 10 ? `0${assignedDeskNum}` : `${assignedDeskNum}`;
-      const occupantName = sampleStudentNames[(num * 3) % sampleStudentNames.length];
-      map[num] = {
-        deskNumber: num,
-        formattedLabel: seat.formattedLabel,
-        presenceStatus: 'occupied',
-        currentOccupant: {
-          name: occupantName,
-          studentId: `BW-${1020 + (num * 3) % 80}-M`,
-          phone: `+91 98${(num * 145) % 90000 + 10000}`,
-          avatarColor: '#D97706',
-          isCrossSeated: true,
-          assignedDeskLabel: `D-${assignedPadded}`,
-          assignedShift: 'Morning Slot (06:00 AM – 02:00 PM)',
-          seatedSince: '10:14 AM',
-          duration: '2h 46m',
-          verifiedVia: 'QR Scanner at Gate',
-          notes: `Assigned to D-${assignedPadded}. Detected at ${seat.formattedLabel} during physical desk check.`,
-        },
-        powerSocketState: 'active_drawing',
-        readingLightOn: true,
-        activeWattage: '45W (MacBook Pro)',
-        lastActivityTime: '2 mins ago',
-        wifiNode: 'AP-Library-Floor1 (5 GHz)',
-        timeline: [
-          {
-            id: 't1',
-            time: '10:14 AM',
-            title: 'Desk Presence Detected (Cross-Seat Flagged)',
-            description: `Student sat at ${seat.formattedLabel}. Official assigned desk is D-${assignedPadded}.`,
-            type: 'cross',
-          },
-          {
-            id: 't2',
-            time: '08:45 AM',
-            title: 'Turnstile Gate Entry Verified',
-            description: 'Scanned dynamic QR code at Main Library Gate 1.',
-            type: 'checkin',
-          },
-          {
-            id: 't3',
-            time: '06:00 AM',
-            title: 'Morning Shift Initialized',
-            description: 'Desk lighting and power circuit activated.',
-            type: 'admin',
-          },
-        ],
-      };
-      return;
-    }
-
-    // SCENARIO 2: TEMPORARILY AWAY ON BREAK (Tea / Lunch / Washroom)
-    if (num % 6 === 0) {
-      const occupantName = seat.morningStudent?.name || sampleStudentNames[num % sampleStudentNames.length];
-      map[num] = {
-        deskNumber: num,
-        formattedLabel: seat.formattedLabel,
-        presenceStatus: 'away',
-        currentOccupant: {
-          name: occupantName,
-          studentId: seat.morningStudent?.studentId || `BW-${1000 + num}-M`,
-          phone: seat.morningStudent?.phone || `+91 98${(num * 123) % 90000 + 10000}`,
-          avatarColor: '#C4A052',
-          isCrossSeated: false,
-          assignedDeskLabel: seat.formattedLabel,
-          assignedShift: 'Morning Slot',
-          seatedSince: '07:30 AM',
-          duration: '4h 45m (Away 14 mins)',
-          verifiedVia: 'QR Scanner at Gate',
-          notes: 'Stepped out for short tea break (14 mins elapsed).',
-        },
-        powerSocketState: 'idle',
-        readingLightOn: false,
-        activeWattage: '6W (Sleep Mode)',
-        lastActivityTime: '14 mins ago',
-        wifiNode: 'AP-Library-Floor1 (5 GHz)',
-        timeline: [
-          {
-            id: 't1',
-            time: '12:18 PM',
-            title: 'Stepped Out on Break',
-            description: 'Student tagged out for lunch/tea break. Grace timer running (30m max).',
-            type: 'break',
-          },
-          {
-            id: 't2',
-            time: '07:30 AM',
-            title: 'Checked in at Desk',
-            description: 'Scanned QR pass at library entrance.',
-            type: 'checkin',
-          },
-        ],
-      };
-      return;
-    }
-
-    // SCENARIO 3: PHYSICALLY OCCUPIED BY LEGITIMATE ASSIGNED STUDENT
-    if (seat.morningStudent) {
-      map[num] = {
-        deskNumber: num,
-        formattedLabel: seat.formattedLabel,
-        presenceStatus: 'occupied',
-        currentOccupant: {
-          name: seat.morningStudent.name,
-          studentId: seat.morningStudent.studentId,
-          phone: seat.morningStudent.phone,
-          avatarColor: '#245C48',
-          isCrossSeated: false,
-          assignedDeskLabel: seat.formattedLabel,
-          assignedShift: 'Morning Slot',
-          seatedSince: '08:15 AM',
-          duration: '4h 00m',
-          verifiedVia: 'QR Scanner at Gate',
-        },
-        powerSocketState: 'active_drawing',
-        readingLightOn: true,
-        activeWattage: '65W (Fast Charger)',
-        lastActivityTime: 'Just now',
-        wifiNode: 'AP-Library-Floor1 (5 GHz)',
-        timeline: [
-          {
-            id: 't1',
-            time: '08:15 AM',
-            title: 'Verified Check-in',
-            description: 'Scanned attendance QR code at library turnstile. Desk occupied.',
-            type: 'checkin',
-          },
-          {
-            id: 't2',
-            time: '06:00 AM',
-            title: 'Shift Commenced',
-            description: 'Power grid energized.',
-            type: 'admin',
-          },
-        ],
-      };
-      return;
-    }
-
-    // SCENARIO 4: VACANT (Available)
-    map[num] = {
-      deskNumber: num,
-      formattedLabel: seat.formattedLabel,
-      presenceStatus: 'vacant',
-      powerSocketState: 'off',
-      readingLightOn: false,
-      activeWattage: '0W',
-      lastActivityTime: 'Shift start (06:00 AM)',
-      wifiNode: 'AP-Library-Floor1 (5 GHz)',
-      timeline: [
-        {
-          id: 't1',
-          time: '07:00 AM',
-          title: 'Housekeeping Desk Inspection',
-          description: 'Desk sanitized, stationery tray organized, ready for seating.',
-          type: 'admin',
-        },
-      ],
-    };
-  });
-
-  return map;
-}
-
 export function SeatManagementView({ onBackToDashboard }: { onBackToDashboard?: () => void }) {
+  const { adminProfile } = useAuth();
   const { width } = useWindowDimensions();
   const isMobile = width < 768;
   const isTablet = width >= 768 && width < 1024;
@@ -488,11 +295,37 @@ export function SeatManagementView({ onBackToDashboard }: { onBackToDashboard?: 
   const [seatDetailTab, setSeatDetailTab] = useState<'two_students' | 'shifts' | 'history' | 'audit'>('two_students');
   const [actionToast, setActionToast] = useState<{ message: string; type: 'success' | 'alert' | 'info' } | null>(null);
 
-  // Real-Time Seat Occupancy state loaded from seatOccupancyService
-  const tenantId = 'bookworm-main';
-  const [occupancyMap, setOccupancyMap] = useState<Record<number, SeatOccupancyItem>>(() =>
-    seatOccupancyService.getAllSeats(tenantId)
-  );
+  // Live tenant data is loaded through the authenticated library profile.
+  const tenantId = adminProfile?.library_id || '';
+  const [occupancyMap, setOccupancyMap] = useState<Record<number, SeatOccupancyItem>>({});
+  const [seatRows, setSeatRows] = useState<SeatItem[]>([]);
+  const [historyRows, setHistoryRows] = useState<SeatOccupancyHistoryRecord[]>([]);
+  const [auditRows, setAuditRows] = useState<SeatOccupancyAuditLog[]>([]);
+  const [studentRows, setStudentRows] = useState<any[]>([]);
+  const [seatingMode, setSeatingMode] = useState<'general' | 'full_shift_reserved'>('general');
+  const [loadingSeats, setLoadingSeats] = useState(true);
+  const [loadError, setLoadError] = useState('');
+  const refreshSeats = async () => {
+    if (!tenantId) return;
+    setLoadingSeats(true);
+    try {
+      const data = await seatOccupancyService.getDashboard(tenantId);
+      setSeatingMode(data.mode);
+      setOccupancyMap(Object.fromEntries(data.seats.map((seat) => [seat.seatNumber, seat])));
+      setHistoryRows(data.history);
+      setAuditRows(data.audit);
+      setStudentRows(data.students);
+      setSeatRows(data.seats.map((seat, index) => {
+        const status: ShiftStatus = seat.occupyingStudent ? 'occupied' : seat.assignedStudent ? 'reserved' : 'available';
+        const student = seat.assignedStudent;
+        const assignedStudent = student ? { name: student.name, studentId: student.studentId, phone: student.phone, plan: student.planName, startDate: student.validityStart, endDate: student.validityEnd, paymentStatus: 'Paid' as const, fee: student.monthlyFee || 0 } : undefined;
+        return { id: index + 1, number: seat.seatNumber, formattedLabel: seat.deskLabel, category: 'classic', morningStudent: assignedStudent, morningStatus: status, eveningStatus: 'available', nightStatus: 'available', hasPowerSocket: seat.powerSocketDrawing || false, hasLocker: false };
+      }));
+      setLoadError('');
+    } catch (error: any) { setLoadError(error.message || 'Could not load seats.'); }
+    finally { setLoadingSeats(false); }
+  };
+  useEffect(() => { refreshSeats(); }, [tenantId]);
 
   // Status Filter for the 5 official statuses:
   // 'all' | 'occupied_assigned' | 'occupied_another' | 'available' | 'reserved' | 'maintenance'
@@ -514,104 +347,8 @@ export function SeatManagementView({ onBackToDashboard }: { onBackToDashboard?: 
   const [statusFilter, setStatusFilter] = useState<'all' | 'full' | 'partial' | 'vacant'>('all');
   const [searchQuery, setSearchQuery] = useState('');
 
-  // Generate All Desks dynamically based on configured category ranges
-  const seatsList = useMemo<SeatItem[]>(() => {
-    const list: SeatItem[] = [];
-
-    categoryRanges.forEach((range) => {
-      for (let num = range.startNo; num <= range.endNo; num++) {
-        const paddedNo = num < 10 ? `0${num}` : `${num}`;
-        const formattedLabel = `${range.prefix}${paddedNo}`;
-
-        // Shift distribution:
-        // Morning: ~75% occupied, 5% reserved, 20% available
-        const hasMorning = (num * 3 + 1) % 10 > 2;
-        const isMorningReserved = !hasMorning && (num % 11 === 0);
-
-        // Evening: ~70% occupied, 5% reserved, 25% available
-        const hasEvening = (num * 5 + 2) % 10 > 3;
-        const isEveningReserved = !hasEvening && (num % 13 === 0);
-
-        // Night: ~55% occupied, 5% reserved, 40% available
-        const hasNight = (num * 7 + 4) % 10 > 5;
-        const isNightReserved = !hasNight && (num % 17 === 0);
-
-        const morningStudent: ShiftStudent | undefined = hasMorning
-          ? {
-              name: sampleStudentNames[(num * 2) % sampleStudentNames.length],
-              studentId: `BW-${1000 + num}-M`,
-              phone: `+91 98${(num * 123) % 90000 + 10000}`,
-              plan: 'Morning Shift',
-              startDate: '01 Nov 2026',
-              endDate: '30 Nov 2026',
-              paymentStatus: num % 5 === 0 ? 'Pending Due' : 'Paid',
-              fee: range.monthlyFee,
-            }
-          : undefined;
-
-        const eveningStudent: ShiftStudent | undefined = hasEvening
-          ? {
-              name: sampleStudentNames[(num * 3 + 1) % sampleStudentNames.length],
-              studentId: `BW-${1000 + num}-E`,
-              phone: `+91 97${(num * 345) % 90000 + 10000}`,
-              plan: 'Evening Shift',
-              startDate: '01 Nov 2026',
-              endDate: '30 Nov 2026',
-              paymentStatus: num % 6 === 0 ? 'Pending Due' : 'Paid',
-              fee: range.monthlyFee,
-            }
-          : undefined;
-
-        const nightStudent: ShiftStudent | undefined = hasNight
-          ? {
-              name: sampleStudentNames[(num * 4 + 2) % sampleStudentNames.length],
-              studentId: `BW-${1000 + num}-N`,
-              phone: `+91 99${(num * 678) % 90000 + 10000}`,
-              plan: 'Night Shift',
-              startDate: '01 Nov 2026',
-              endDate: '30 Nov 2026',
-              paymentStatus: num % 4 === 0 ? 'Pending Due' : 'Paid',
-              fee: Math.round(range.monthlyFee * 0.75),
-            }
-          : undefined;
-
-        const morningStatus: ShiftStatus = morningStudent
-          ? 'occupied'
-          : isMorningReserved
-          ? 'reserved'
-          : 'available';
-
-        const eveningStatus: ShiftStatus = eveningStudent
-          ? 'occupied'
-          : isEveningReserved
-          ? 'reserved'
-          : 'available';
-
-        const nightStatus: ShiftStatus = nightStudent
-          ? 'occupied'
-          : isNightReserved
-          ? 'reserved'
-          : 'available';
-
-        list.push({
-          id: num,
-          number: num,
-          formattedLabel,
-          category: range.id,
-          morningStudent,
-          eveningStudent,
-          nightStudent,
-          morningStatus,
-          eveningStatus,
-          nightStatus,
-          hasPowerSocket: range.id !== 'classic' || num % 2 === 0,
-          hasLocker: range.id === 'exclusive' || (range.id === 'premium' && num % 2 === 1),
-        });
-      }
-    });
-
-    return list.sort((a, b) => a.number - b.number);
-  }, [categoryRanges]);
+  // The grid is populated only from the authenticated library database.
+  const seatsList = seatRows;
 
   const totalSeats = seatsList.length;
 
@@ -786,95 +523,95 @@ export function SeatManagementView({ onBackToDashboard }: { onBackToDashboard?: 
       available: all.filter((s) => s.status === 'available').length,
       reserved: all.filter((s) => s.status === 'reserved').length,
       maintenance: all.filter((s) => s.status === 'maintenance').length,
-      crossSeatHotspots: seatOccupancyService.getCrossSeatAnalytics(tenantId),
+      crossSeatHotspots: [],
     };
   }, [occupancyMap]);
 
   // Current selected seat occupancy, history and audit records
   const currentSeatOccupancy: SeatOccupancyItem | undefined = useMemo(() => {
     if (!selectedSeat) return undefined;
-    return occupancyMap[selectedSeat.number] || seatOccupancyService.getSeat(tenantId, selectedSeat.number);
+    return occupancyMap[selectedSeat.number];
   }, [selectedSeat, occupancyMap]);
 
   const currentSeatHistory: SeatOccupancyHistoryRecord[] = useMemo(() => {
     if (!selectedSeat) return [];
-    return seatOccupancyService.getHistory(tenantId, selectedSeat.number);
-  }, [selectedSeat, occupancyMap]);
+    return historyRows.filter((item) => item.seatNumber === selectedSeat.number);
+  }, [selectedSeat, historyRows]);
 
   const currentSeatAudit: SeatOccupancyAuditLog[] = useMemo(() => {
     if (!selectedSeat) return [];
-    return seatOccupancyService.getAuditLogs(tenantId, selectedSeat.number);
-  }, [selectedSeat, occupancyMap]);
+    return auditRows.filter((item) => item.seatNumber === selectedSeat.number);
+  }, [selectedSeat, auditRows]);
 
   // -------------------------------------------------------------------------
   // ADMIN ACTION HANDLERS (ENFORCING BUSINESS RULES & MULTI-TENANT ISOLATION)
   // -------------------------------------------------------------------------
-  const handleAssignOccupant = (
+  const handleAssignOccupant = async (
     student: { studentId: string; name: string; department?: string; phone?: string },
     notes?: string
   ) => {
     if (!selectedSeat) return;
     try {
-      const res = seatOccupancyService.manuallyAssignOccupant(
-        tenantId,
-        selectedSeat.number,
-        student,
-        'Admin (Civil Lines)',
-        notes
-      );
-      setOccupancyMap({ ...seatOccupancyService.getAllSeats(tenantId) });
+      const selectedStudent = studentRows.find((item) => item.student_id === student.studentId);
+      if (!selectedStudent) throw new Error('Select an active student from this library.');
+      const actualSeat = occupancyMap[selectedSeat.number];
+      if (!actualSeat) throw new Error('Seat is no longer available. Refresh and try again.');
+      if (seatingMode === 'full_shift_reserved' && selectedStudent.is_full_shift) {
+        if (!selectedStudent.shift_id) throw new Error('This full-shift student has no active shift configured.');
+        await seatOccupancyService.assignSeat(tenantId, actualSeat.seatId, selectedStudent.id, selectedStudent.shift_id, true,
+          selectedStudent.start_date || new Date().toISOString().slice(0, 10), selectedStudent.end_date || new Date().toISOString().slice(0, 10), selectedStudent.subscription_id);
+      } else {
+        await seatOccupancyService.occupySeat(tenantId, actualSeat.seatId, selectedStudent.id, seatingMode, selectedStudent.is_full_shift);
+      }
+      await refreshSeats();
       setIsAssignModalOpen(false);
       setStudentSearchText('');
       setAdminNoteText('');
       setCustomStudentName('');
       setCustomStudentId('');
       setActionToast({
-        type: res.seat.isCrossOccupied ? 'alert' : 'success',
-        message: res.message,
+        type: 'success',
+        message: `Seat ${selectedSeat.formattedLabel} occupancy saved.`,
       });
     } catch (err: any) {
       setActionToast({ type: 'alert', message: err.message || 'Failed to assign occupant.' });
     }
   };
 
-  const handleReleaseSeat = (reason: string = 'Desk vacated by admin') => {
+  const handleReleaseSeat = async (reason: string = 'Desk vacated by admin') => {
     if (!selectedSeat) return;
     try {
-      const res = seatOccupancyService.releaseSeat(
-        tenantId,
-        selectedSeat.number,
-        'Admin (Civil Lines)',
-        reason
-      );
-      setOccupancyMap({ ...seatOccupancyService.getAllSeats(tenantId) });
+      const actualSeat = occupancyMap[selectedSeat.number];
+      if (!actualSeat) throw new Error('Seat was not found.');
+      await seatOccupancyService.releaseSeat(tenantId, actualSeat.seatId, adminProfile!.id, reason);
+      await refreshSeats();
       setActionToast({
         type: 'success',
-        message: res.message,
+        message: `Seat ${selectedSeat.formattedLabel} released.`,
       });
     } catch (err: any) {
       setActionToast({ type: 'alert', message: err.message || 'Failed to release seat.' });
     }
   };
 
-  const handleCorrectOccupant = (
+  const handleReleaseAllocation = async () => {
+    if (!selectedSeat) return;
+    const allocationId = occupancyMap[selectedSeat.number]?.allocationId;
+    if (!allocationId) return;
+    try {
+      await seatOccupancyService.vacateAllocation(tenantId, allocationId);
+      await refreshSeats();
+      setActionToast({ type: 'success', message: `Permanent allocation for ${selectedSeat.formattedLabel} released.` });
+    } catch (err: any) { setActionToast({ type: 'alert', message: err.message || 'Could not release allocation.' }); }
+  };
+
+  const handleCorrectOccupant = async (
     newStudent: { studentId: string; name: string; department?: string; phone?: string },
     notes?: string
   ) => {
     if (!selectedSeat) return;
     try {
-      const res = seatOccupancyService.correctOccupancy(
-        tenantId,
-        selectedSeat.number,
-        newStudent,
-        'Admin (Civil Lines)',
-        notes || 'Corrected record'
-      );
-      setOccupancyMap({ ...seatOccupancyService.getAllSeats(tenantId) });
-      setIsCorrectModalOpen(false);
-      setActionToast({
-        type: 'info',
-        message: res.message,
-      });
+      throw new Error('Attendance corrections require an audit reason and are not available from this screen yet.');
     } catch (err: any) {
       setActionToast({ type: 'alert', message: err.message || 'Failed to correct record.' });
     }
@@ -883,21 +620,7 @@ export function SeatManagementView({ onBackToDashboard }: { onBackToDashboard?: 
   const handleToggleMaintenance = (isMaint: boolean, reason?: string) => {
     if (!selectedSeat) return;
     try {
-      seatOccupancyService.toggleMaintenance(
-        tenantId,
-        selectedSeat.number,
-        isMaint,
-        reason || 'Scheduled surface and electrical inspection',
-        'Admin (Civil Lines)'
-      );
-      setOccupancyMap({ ...seatOccupancyService.getAllSeats(tenantId) });
-      setIsMaintenanceModalOpen(false);
-      setActionToast({
-        type: isMaint ? 'info' : 'success',
-        message: isMaint
-          ? `Desk ${selectedSeat.formattedLabel} placed under maintenance.`
-          : `Desk ${selectedSeat.formattedLabel} restored to service.`,
-      });
+      throw new Error('The schema has no seat maintenance field.');
     } catch (err: any) {
       setActionToast({ type: 'alert', message: err.message || 'Failed to update maintenance.' });
     }
@@ -996,6 +719,15 @@ export function SeatManagementView({ onBackToDashboard }: { onBackToDashboard?: 
           </TouchableOpacity>
         </View>
       </View>
+
+      {(loadingSeats || loadError) && (
+        <View style={{ paddingVertical: 8, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+          <Text style={{ color: loadError ? '#B45309' : colors.text.muted, fontSize: 12 }}>
+            {loadingSeats ? 'Loading seats and occupancy…' : loadError}
+          </Text>
+          {loadError ? <TouchableOpacity onPress={refreshSeats}><Text style={{ color: '#245C48', fontWeight: '700' }}>Retry</Text></TouchableOpacity> : null}
+        </View>
+      )}
 
       {/* ========================================================================= */}
       {/* 2. CATEGORY SUMMARY CARDS: REDESIGNED WITH WHITE BG & SUBTLE TINT HIGHLIGHT*/}
@@ -2150,6 +1882,16 @@ export function SeatManagementView({ onBackToDashboard }: { onBackToDashboard?: 
                             </TouchableOpacity>
                           )}
 
+                          {assigned && occupancyMap[selectedSeat.number]?.allocationId && (
+                            <TouchableOpacity
+                              activeOpacity={0.8}
+                              onPress={handleReleaseAllocation}
+                              style={[styles.adminActionBtnOutline, { borderColor: '#B58A4A' }]}>
+                              <LogOut size={14} color="#B58A4A" strokeWidth={2.2} />
+                              <Text style={[styles.adminActionBtnTextOutline, { color: '#B58A4A' }]}>Release Permanent Allocation</Text>
+                            </TouchableOpacity>
+                          )}
+
                           {occupant && (
                             <TouchableOpacity
                               activeOpacity={0.8}
@@ -2186,7 +1928,7 @@ export function SeatManagementView({ onBackToDashboard }: { onBackToDashboard?: 
                       SEAT OCCUPANCY SESSION HISTORY
                     </Text>
                     {(() => {
-                      const historyList = seatOccupancyService.getSeatHistory(tenantId, selectedSeat.number);
+                      const historyList = historyRows.filter((item) => item.seatNumber === selectedSeat.number);
                       if (historyList.length === 0) {
                         return (
                           <View style={styles.emptyHistoryBox}>
@@ -2269,7 +2011,7 @@ export function SeatManagementView({ onBackToDashboard }: { onBackToDashboard?: 
                       DESK AUDIT TRAIL & OVERRIDE LOG
                     </Text>
                     {(() => {
-                      const auditList = seatOccupancyService.getSeatAuditLogs(tenantId, selectedSeat.number);
+                      const auditList = auditRows.filter((item) => item.seatNumber === selectedSeat.number);
                       if (auditList.length === 0) {
                         return (
                           <View style={styles.emptyHistoryBox}>
@@ -2358,30 +2100,29 @@ export function SeatManagementView({ onBackToDashboard }: { onBackToDashboard?: 
               />
 
               <ScrollView style={styles.helperStudentsList}>
-                {SEED_STUDENTS.filter(s =>
+                {studentRows.filter((s) =>
                   !studentSearchText ||
-                  s.name.toLowerCase().includes(studentSearchText.toLowerCase()) ||
-                  s.id.toLowerCase().includes(studentSearchText.toLowerCase())
+                  s.full_name.toLowerCase().includes(studentSearchText.toLowerCase()) ||
+                  s.student_id.toLowerCase().includes(studentSearchText.toLowerCase())
                 ).slice(0, 5).map((stud) => (
                   <TouchableOpacity
                     key={stud.id}
                     activeOpacity={0.7}
                     onPress={() => {
                       handleAssignOccupant({
-                        studentId: stud.id,
-                        name: stud.name,
-                        department: stud.department,
+                        studentId: stud.student_id,
+                        name: stud.full_name,
                         phone: stud.phone,
                       }, adminNoteText);
                     }}
                     style={[styles.helperStudentOption, { borderColor: colors.surface.border }]}>
                     <View style={{ flex: 1 }}>
-                      <Text style={[styles.helperStudentName, { color: colors.text.primary }]}>{stud.name}</Text>
+                      <Text style={[styles.helperStudentName, { color: colors.text.primary }]}>{stud.full_name}</Text>
                       <Text style={[styles.helperStudentId, { color: colors.text.muted }]}>
-                        {stud.id} • {stud.department || 'General'}
+                        {stud.student_id} • {stud.shift_name || 'Partial shift'}
                       </Text>
                     </View>
-                    <Text style={{ fontSize: 12, color: '#245C48', fontWeight: '700' }}>Seat Here →</Text>
+                    <Text style={{ fontSize: 12, color: '#245C48', fontWeight: '700' }}>{seatingMode === 'full_shift_reserved' && stud.is_full_shift ? 'Assign →' : 'Seat Here →'}</Text>
                   </TouchableOpacity>
                 ))}
               </ScrollView>

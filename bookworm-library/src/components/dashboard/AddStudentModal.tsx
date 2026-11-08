@@ -7,10 +7,13 @@ import {
   Modal,
   StyleSheet,
   ScrollView,
+  ActivityIndicator,
 } from 'react-native';
-import { X, UserPlus, Check, Armchair, Clock, Phone, User } from 'lucide-react-native';
+import { X, UserPlus, Check, Armchair, Clock, Phone, User, Mail, AlertCircle } from 'lucide-react-native';
 import { DashboardTheme } from '@/constants/dashboard-theme';
 import { useThemeMode } from '@/context/ThemeContext';
+import { useAuth } from '@/context/AuthContext';
+import { studentService } from '@/services/student-service';
 
 interface AddStudentModalProps {
   visible: boolean;
@@ -19,25 +22,89 @@ interface AddStudentModalProps {
 }
 
 export function AddStudentModal({ visible, onClose, onSubmit }: AddStudentModalProps) {
+  const { adminProfile } = useAuth();
   const [fullName, setFullName] = useState('');
   const [phone, setPhone] = useState('');
+  const [email, setEmail] = useState('');
   const [selectedShift, setSelectedShift] = useState('Full Day');
   const [assignedSeat, setAssignedSeat] = useState('D-15');
   const [paymentMode, setPaymentMode] = useState('UPI');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [submitted, setSubmitted] = useState(false);
 
   const { colors, shadows, isDark } = useThemeMode();
 
-  const handleSave = () => {
-    setSubmitted(true);
-    setTimeout(() => {
-      setSubmitted(false);
-      onClose();
-    }, 1200);
+  const resetForm = () => {
+    setFullName('');
+    setPhone('');
+    setEmail('');
+    setSelectedShift('Full Day');
+    setAssignedSeat('D-15');
+    setPaymentMode('UPI');
+    setErrorMessage(null);
+    setSubmitted(false);
+    setIsSubmitting(false);
+  };
+
+  const handleClose = () => {
+    resetForm();
+    onClose();
+  };
+
+  const handleSave = async () => {
+    if (isSubmitting) return;
+    setErrorMessage(null);
+
+    const trimmedName = fullName.trim();
+    const trimmedPhone = phone.trim();
+
+    if (!trimmedName || trimmedName.length < 2) {
+      setErrorMessage('Please enter student full name (minimum 2 characters).');
+      return;
+    }
+    if (!trimmedPhone || trimmedPhone.replace(/\D/g, '').length < 10) {
+      setErrorMessage('Please enter a valid 10-digit mobile number.');
+      return;
+    }
+
+    const libraryId = adminProfile?.library_id;
+    if (!libraryId) {
+      setErrorMessage('Active administrator session or library ID not found.');
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      const result = await studentService.addStudent(libraryId, {
+        fullName: trimmedName,
+        phone: trimmedPhone,
+        email: email.trim() || undefined,
+        shift: selectedShift,
+        seatNumber: assignedSeat.trim().toUpperCase() || 'D-15',
+        paymentMode,
+        amountPaid: selectedShift.includes('Full') ? 2800 : 2000,
+      });
+
+      if (!result.success || !result.data) {
+        setErrorMessage(result.error || 'Failed to enroll student.');
+        setIsSubmitting(false);
+        return;
+      }
+
+      setSubmitted(true);
+      onSubmit?.(result.data);
+      setTimeout(() => {
+        handleClose();
+      }, 1200);
+    } catch (err: any) {
+      setErrorMessage(err?.message || 'An unexpected error occurred.');
+      setIsSubmitting(false);
+    }
   };
 
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={handleClose}>
       <View style={styles.backdrop}>
         <View style={[styles.dialog, shadows.lg, { backgroundColor: colors.surface.card, borderColor: colors.surface.border, borderWidth: 1 }]}>
           {/* Header */}
@@ -52,7 +119,7 @@ export function AddStudentModal({ visible, onClose, onSubmit }: AddStudentModalP
               </View>
             </View>
 
-            <TouchableOpacity onPress={onClose} style={[styles.closeBtn, { backgroundColor: colors.surface.cardAlt }]}>
+            <TouchableOpacity onPress={handleClose} style={[styles.closeBtn, { backgroundColor: colors.surface.cardAlt }]}>
               <X size={18} color={colors.text.muted} />
             </TouchableOpacity>
           </View>
@@ -69,9 +136,17 @@ export function AddStudentModal({ visible, onClose, onSubmit }: AddStudentModalP
             </View>
           ) : (
             <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.form}>
+              {/* Error Message */}
+              {errorMessage && (
+                <View style={[styles.errorBox, { backgroundColor: isDark ? '#3D2020' : '#FDECE8', borderColor: '#C76B59' }]}>
+                  <AlertCircle size={16} color="#C76B59" />
+                  <Text style={styles.errorText}>{errorMessage}</Text>
+                </View>
+              )}
+
               {/* Full Name */}
               <View style={styles.inputGroup}>
-                <Text style={[styles.inputLabel, { color: colors.text.secondary }]}>Full Name</Text>
+                <Text style={[styles.inputLabel, { color: colors.text.secondary }]}>Full Name *</Text>
                 <View style={[styles.inputWrapper, { backgroundColor: colors.surface.canvas, borderColor: colors.surface.border }]}>
                   <User size={16} color={colors.text.muted} />
                   <TextInput
@@ -79,6 +154,7 @@ export function AddStudentModal({ visible, onClose, onSubmit }: AddStudentModalP
                     onChangeText={setFullName}
                     placeholder="e.g. Rahul Sharma"
                     placeholderTextColor={colors.text.faint}
+                    editable={!isSubmitting}
                     style={[styles.textInput, { color: colors.text.primary }]}
                   />
                 </View>
@@ -86,7 +162,7 @@ export function AddStudentModal({ visible, onClose, onSubmit }: AddStudentModalP
 
               {/* Phone Number */}
               <View style={styles.inputGroup}>
-                <Text style={[styles.inputLabel, { color: colors.text.secondary }]}>WhatsApp / Mobile Number</Text>
+                <Text style={[styles.inputLabel, { color: colors.text.secondary }]}>WhatsApp / Mobile Number *</Text>
                 <View style={[styles.inputWrapper, { backgroundColor: colors.surface.canvas, borderColor: colors.surface.border }]}>
                   <Phone size={16} color={colors.text.muted} />
                   <TextInput
@@ -95,6 +171,25 @@ export function AddStudentModal({ visible, onClose, onSubmit }: AddStudentModalP
                     placeholder="+91 98765 43210"
                     placeholderTextColor={colors.text.faint}
                     keyboardType="phone-pad"
+                    editable={!isSubmitting}
+                    style={[styles.textInput, { color: colors.text.primary }]}
+                  />
+                </View>
+              </View>
+
+              {/* Email Address */}
+              <View style={styles.inputGroup}>
+                <Text style={[styles.inputLabel, { color: colors.text.secondary }]}>Email Address (Optional)</Text>
+                <View style={[styles.inputWrapper, { backgroundColor: colors.surface.canvas, borderColor: colors.surface.border }]}>
+                  <Mail size={16} color={colors.text.muted} />
+                  <TextInput
+                    value={email}
+                    onChangeText={setEmail}
+                    placeholder="student@example.com"
+                    placeholderTextColor={colors.text.faint}
+                    keyboardType="email-address"
+                    autoCapitalize="none"
+                    editable={!isSubmitting}
                     style={[styles.textInput, { color: colors.text.primary }]}
                   />
                 </View>
@@ -109,6 +204,7 @@ export function AddStudentModal({ visible, onClose, onSubmit }: AddStudentModalP
                     return (
                       <TouchableOpacity
                         key={shift}
+                        disabled={isSubmitting}
                         onPress={() => setSelectedShift(shift)}
                         style={[
                           styles.shiftPill,
@@ -143,6 +239,7 @@ export function AddStudentModal({ visible, onClose, onSubmit }: AddStudentModalP
                       onChangeText={setAssignedSeat}
                       placeholder="e.g. D-15"
                       placeholderTextColor={colors.text.faint}
+                      editable={!isSubmitting}
                       style={[styles.textInput, { color: colors.text.primary }]}
                     />
                   </View>
@@ -154,6 +251,7 @@ export function AddStudentModal({ visible, onClose, onSubmit }: AddStudentModalP
                     {['UPI', 'Cash'].map((m) => (
                       <TouchableOpacity
                         key={m}
+                        disabled={isSubmitting}
                         onPress={() => setPaymentMode(m)}
                         style={[styles.paymentPill, paymentMode === m && { backgroundColor: isDark ? '#245C48' : colors.brand.primary }]}>
                         <Text style={[styles.paymentText, { color: paymentMode === m ? '#FFFFFF' : colors.text.muted }]}>
@@ -167,17 +265,30 @@ export function AddStudentModal({ visible, onClose, onSubmit }: AddStudentModalP
 
               {/* Action Buttons */}
               <View style={styles.actionRow}>
-                <TouchableOpacity onPress={onClose} style={[styles.cancelBtn, isDark && { backgroundColor: colors.surface.cardAlt, borderWidth: 1, borderColor: colors.surface.border }]}>
+                <TouchableOpacity disabled={isSubmitting} onPress={handleClose} style={[styles.cancelBtn, isDark && { backgroundColor: colors.surface.cardAlt, borderWidth: 1, borderColor: colors.surface.border }]}>
                   <Text style={[styles.cancelBtnText, { color: colors.text.muted }]}>Cancel</Text>
                 </TouchableOpacity>
 
-                <TouchableOpacity onPress={handleSave} style={[styles.saveBtn, { backgroundColor: isDark ? '#245C48' : colors.brand.primary }]}>
-                  <UserPlus size={16} color="#FFFFFF" strokeWidth={2.4} />
-                  <Text style={styles.saveBtnText}>Register & Assign Seat</Text>
+                <TouchableOpacity
+                  disabled={isSubmitting}
+                  onPress={handleSave}
+                  style={[styles.saveBtn, { backgroundColor: isDark ? '#245C48' : colors.brand.primary, opacity: isSubmitting ? 0.7 : 1 }]}>
+                  {isSubmitting ? (
+                    <ActivityIndicator size="small" color="#FFFFFF" />
+                  ) : (
+                    <>
+                      <UserPlus size={16} color="#FFFFFF" strokeWidth={2.4} />
+                      <Text style={styles.saveBtnText}>Register & Assign Seat</Text>
+                    </>
+                  )}
                 </TouchableOpacity>
               </View>
             </ScrollView>
           )}
+        </View>
+      </View>
+    </Modal>
+  );
         </View>
       </View>
     </Modal>
@@ -381,6 +492,21 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: colors.text.muted,
     textAlign: 'center',
+  },
+  errorBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    padding: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    marginBottom: 4,
+  },
+  errorText: {
+    color: '#C76B59',
+    fontSize: 12,
+    fontWeight: '600',
+    flex: 1,
   },
 });
 
