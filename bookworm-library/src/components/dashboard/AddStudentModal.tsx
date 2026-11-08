@@ -289,10 +289,6 @@ export function AddStudentModal({ visible, onClose, onSubmit }: AddStudentModalP
       </View>
     </Modal>
   );
-        </View>
-      </View>
-    </Modal>
-  );
 }
 
 const { colors } = DashboardTheme;
