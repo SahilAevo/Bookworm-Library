@@ -27,6 +27,7 @@ import {
   Sparkles,
 } from 'lucide-react-native';
 import { useThemeMode } from '@/context/ThemeContext';
+import { useAuth } from '@/context/AuthContext';
 import { ClaymorphicShadows, ClaymorphicShadowsDark } from '@/constants/dashboard-theme';
 import { LibraryTenant, DEFAULT_TENANT } from '@/constants/tenants';
 
@@ -43,22 +44,24 @@ export function AdminLoginView({
 }: AdminLoginViewProps) {
   const { width } = useWindowDimensions();
   const { colors, isDark, toggleTheme } = useThemeMode();
+  const { signInAdmin } = useAuth();
   const shadows = isDark ? ClaymorphicShadowsDark : ClaymorphicShadows;
   const isMobile = width < 768;
 
   // Form states
-  const [email, setEmail] = useState(tenant.adminEmail);
-  const [password, setPassword] = useState('Admin@Bookworm2026');
+  const [email, setEmail] = useState(tenant.adminEmail || '');
+  const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [rememberMe, setRememberMe] = useState(true);
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [showForgotNotice, setShowForgotNotice] = useState(false);
 
-  const handleLogin = () => {
+  const handleLogin = async () => {
+    if (isLoading) return;
     setErrorMessage(null);
     if (!email.trim()) {
-      setErrorMessage('Please enter your administrator email or ID.');
+      setErrorMessage('Please enter your administrator email.');
       return;
     }
     if (!password.trim()) {
@@ -67,22 +70,23 @@ export function AdminLoginView({
     }
 
     setIsLoading(true);
-    // Simulate brief authentication verification
-    setTimeout(() => {
+    try {
+      const result = await signInAdmin(email.trim(), password);
+      if (result.success) {
+        onLoginSuccess();
+      } else {
+        setErrorMessage(result.error || 'Invalid credentials or unauthorized account.');
+      }
+    } catch (err: any) {
+      setErrorMessage(err?.message || 'An unexpected error occurred during sign in.');
+    } finally {
       setIsLoading(false);
-      onLoginSuccess();
-    }, 600);
+    }
   };
 
   const handleQuickDemo = () => {
     setEmail('admin@bookwormlib.com');
-    setPassword('Admin@Bookworm2026');
     setErrorMessage(null);
-    setIsLoading(true);
-    setTimeout(() => {
-      setIsLoading(false);
-      onLoginSuccess();
-    }, 450);
   };
 
   return (
@@ -237,6 +241,7 @@ export function AdminLoginView({
                 placeholderTextColor={colors.text.faint}
                 keyboardType="email-address"
                 autoCapitalize="none"
+                editable={!isLoading}
                 style={[styles.inputField, { color: colors.text.primary }]}
               />
             </View>
@@ -262,6 +267,7 @@ export function AdminLoginView({
                 placeholder="Enter password"
                 placeholderTextColor={colors.text.faint}
                 secureTextEntry={!showPassword}
+                editable={!isLoading}
                 style={[styles.inputField, { color: colors.text.primary }]}
               />
               <TouchableOpacity

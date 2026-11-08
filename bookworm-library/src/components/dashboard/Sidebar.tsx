@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import {
   View,
   Text,
@@ -28,6 +28,7 @@ import {
 } from 'lucide-react-native';
 import { DashboardTheme } from '@/constants/dashboard-theme';
 import { useThemeMode } from '@/context/ThemeContext';
+import { useAuth } from '@/context/AuthContext';
 
 interface SidebarProps {
   currentRoute?: string;
@@ -65,6 +66,19 @@ export function SidebarContent({
   onLogout?: () => void;
 }) {
   const { colors, isDark } = useThemeMode();
+  const { adminProfile } = useAuth();
+
+  const adminName = adminProfile?.full_name || 'Admin';
+  const adminInitials = useMemo(() => {
+    if (!adminProfile?.full_name) return 'AD';
+    const parts = adminProfile.full_name.trim().split(/\s+/);
+    if (parts.length >= 2) {
+      return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+    }
+    return adminProfile.full_name.slice(0, 2).toUpperCase();
+  }, [adminProfile?.full_name]);
+
+  const libraryName = adminProfile?.library?.name || 'Bookworm Library';
 
   return (
     <View style={[styles.container, { backgroundColor: colors.surface.sidebar }]}>
@@ -274,14 +288,14 @@ export function SidebarContent({
                 borderWidth: 1,
               },
             ]}>
-            <Text style={styles.avatarText}>RS</Text>
+            <Text style={styles.avatarText}>{adminInitials}</Text>
           </View>
           <View style={styles.profileInfo}>
             <Text style={[styles.profileName, { color: colors.text.primary }]} numberOfLines={1}>
-              Rajesh Sharma
+              {adminName}
             </Text>
             <Text style={[styles.profileRole, { color: colors.text.muted }]} numberOfLines={1}>
-              Bookworm Library Admin
+              {libraryName} Admin
             </Text>
           </View>
           <TouchableOpacity

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -7,6 +7,7 @@ import {
   TouchableOpacity,
   useWindowDimensions,
   Platform,
+  ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import {
@@ -19,6 +20,7 @@ import {
 
 import { DashboardTheme } from '@/constants/dashboard-theme';
 import { useThemeMode } from '@/context/ThemeContext';
+import { useAuth } from '@/context/AuthContext';
 import { Sidebar } from '@/components/dashboard/Sidebar';
 import { TopNavbar } from '@/components/dashboard/TopNavbar';
 import { StatCard } from '@/components/dashboard/StatCard';
@@ -61,6 +63,23 @@ export default function AdminDashboardScreen() {
   const [isMarkAttendanceOpen, setIsMarkAttendanceOpen] = useState(false);
 
   const { colors, isDark } = useThemeMode();
+  const { adminProfile, isLoading: isAuthLoading, signOut } = useAuth();
+
+  useEffect(() => {
+    if (adminProfile && authScreen !== 'student-login' && authScreen !== 'student-dashboard') {
+      setAuthScreen('admin-dashboard');
+    } else if (!adminProfile && authScreen === 'admin-dashboard') {
+      setAuthScreen('selection');
+    }
+  }, [adminProfile]);
+
+  const handleAdminLogout = async () => {
+    try {
+      await signOut();
+    } finally {
+      setAuthScreen('selection');
+    }
+  };
 
   // Responsive Breakpoints
   const isDesktop = width >= 1024;
@@ -76,6 +95,16 @@ export default function AdminDashboardScreen() {
       year: 'numeric',
     })
     .toUpperCase();
+
+  if (isAuthLoading) {
+    return (
+      <SafeAreaView
+        style={[styles.safeArea, { backgroundColor: colors.surface.canvas, justifyContent: 'center', alignItems: 'center' }]}
+        edges={['top', 'left', 'right', 'bottom']}>
+        <ActivityIndicator size="large" color={colors.brand.primary} />
+      </SafeAreaView>
+    );
+  }
 
   if (authScreen === 'selection') {
     return (
@@ -157,7 +186,7 @@ export default function AdminDashboardScreen() {
           <Sidebar
             currentRoute={currentRoute}
             onNavigate={(route) => setCurrentRoute(route)}
-            onLogout={() => setAuthScreen('selection')}
+            onLogout={handleAdminLogout}
           />
         ) : (
           <Sidebar
@@ -168,7 +197,7 @@ export default function AdminDashboardScreen() {
             }}
             isMobileOpen={isMobileMenuOpen}
             onMobileClose={() => setIsMobileMenuOpen(false)}
-            onLogout={() => setAuthScreen('selection')}
+            onLogout={handleAdminLogout}
           />
         )}
 
@@ -181,7 +210,7 @@ export default function AdminDashboardScreen() {
             searchQuery={searchQuery}
             onSearchChange={setSearchQuery}
             onNotificationPress={() => {}}
-            onLogout={() => setAuthScreen('selection')}
+            onLogout={handleAdminLogout}
           />
 
           {/* Scrollable Dashboard Viewport */}

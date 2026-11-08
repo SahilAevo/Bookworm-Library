@@ -448,9 +448,6 @@ export function SeatManagementView({ onBackToDashboard }: { onBackToDashboard?: 
 
   const { colors, shadows, isDark } = useThemeMode();
 
-  // 1. Expand / Compact view toggle state
-  const [isExpandedView, setIsExpandedView] = useState(false);
-
   // 2. Category Range Configuration (Defaults: Exclusive 1-50, Premium 51-80, Classic 81-150)
   const [categoryRanges, setCategoryRanges] = useState<CategoryRangeConfig[]>([
     {
@@ -981,31 +978,6 @@ export function SeatManagementView({ onBackToDashboard }: { onBackToDashboard?: 
 
         {/* Right Action Controls */}
         <View style={styles.headerRight}>
-          {/* Small Top Expand / Compact Toggle Button */}
-          <TouchableOpacity
-            activeOpacity={0.8}
-            onPress={() => setIsExpandedView(!isExpandedView)}
-            style={[
-              styles.expandToggleBtn,
-              {
-                backgroundColor: isExpandedView ? '#245C48' : (isDark ? colors.surface.cardAlt : '#FFFFFF'),
-                borderColor: isExpandedView ? '#245C48' : colors.surface.border,
-              },
-            ]}>
-            {isExpandedView ? (
-              <Minimize2 size={14} color="#FFFFFF" strokeWidth={2.2} />
-            ) : (
-              <Maximize2 size={14} color={colors.text.primary} strokeWidth={2.2} />
-            )}
-            <Text
-              style={[
-                styles.expandToggleBtnText,
-                { color: isExpandedView ? '#FFFFFF' : colors.text.primary },
-              ]}>
-              {isExpandedView ? 'Compact' : 'Expand'}
-            </Text>
-          </TouchableOpacity>
-
           {/* Desk & Shift Configuration Settings */}
           <TouchableOpacity
             onPress={handleOpenCustomizeModal}
@@ -1406,263 +1378,35 @@ export function SeatManagementView({ onBackToDashboard }: { onBackToDashboard?: 
               <Text style={styles.emptyStateResetBtnText}>Reset All Filters</Text>
             </TouchableOpacity>
           </View>
-        ) : isExpandedView ? (
-          // ---------------------------------------------------------------------
-          // EXPANDED VIEW: DISPLAYS NAMES OF ENROLLED STUDENTS FOR EACH SHIFT
-          // ---------------------------------------------------------------------
-          <View style={styles.expandedGrid}>
-            {filteredSeats.map((seat) => {
-              const catStyles = getCategoryStyles(seat.category);
-
-              return (
-                <TouchableOpacity
-                  key={seat.number}
-                  activeOpacity={0.82}
-                  onPress={() => setSelectedSeat(seat)}
-                  style={[
-                    styles.expandedSeatCard,
-                    {
-                      backgroundColor: isDark ? colors.surface.card : catStyles.cardBg,
-                      borderColor: catStyles.cardBorder,
-                      width: isMobile ? '100%' : isTablet ? '48%' : 260,
-                    },
-                  ]}>
-                  {/* Top Bar: Seat Number & Category Identifier */}
-                  <View style={[styles.expandedCardTop, { borderBottomColor: catStyles.cardBorder }]}>
-                    <View style={styles.expandedSeatNumberRow}>
-                      <Text style={[styles.expandedSeatNumberText, { color: colors.text.primary }]}>
-                        {seat.formattedLabel}
-                      </Text>
-                    </View>
-
-                    <View style={[styles.expandedCatBadge, { backgroundColor: catStyles.accentBg }]}>
-                      <Text style={[styles.expandedCatBadgeText, { color: catStyles.badgeText }]}>
-                        {catStyles.label}
-                      </Text>
-                    </View>
-                  </View>
-
-                  {/* 3 Shift Rows: Badges & Student Name ONLY (no timing text or shift words) */}
-                  <View style={styles.expandedShiftsGroup}>
-                    {/* Morning Shift */}
-                    <View
-                      style={[
-                        styles.expandedShiftRow,
-                        { borderBottomColor: isDark ? 'rgba(255, 255, 255, 0.07)' : 'rgba(0, 0, 0, 0.06)' },
-                      ]}>
-                      <View
-                        style={[
-                          styles.shiftBadgeMini,
-                          {
-                            backgroundColor: seat.morningStudent
-                              ? (isDark ? '#245C48' : '#287A5B')
-                              : (isDark ? colors.surface.canvas : '#EEEEEE'),
-                            borderColor: seat.morningStudent
-                              ? (isDark ? '#55B58D' : '#287A5B')
-                              : (isDark ? colors.surface.border : '#DDD9CE'),
-                            borderWidth: 1,
-                          },
-                        ]}>
-                        <Text
-                          style={[
-                            styles.shiftBadgeMiniText,
-                            { color: seat.morningStudent ? '#FFFFFF' : colors.text.muted },
-                          ]}>
-                          M
-                        </Text>
-                      </View>
-                      {seat.morningStudent ? (
-                        <Text style={[styles.expandedStudentName, { color: colors.text.primary }]} numberOfLines={1}>
-                          {seat.morningStudent.name}
-                        </Text>
-                      ) : (
-                        <Text style={[styles.expandedVacantText, { color: colors.text.muted }]} numberOfLines={1}>
-                          Available
-                        </Text>
-                      )}
-                    </View>
-
-                    {/* Evening Shift */}
-                    <View
-                      style={[
-                        styles.expandedShiftRow,
-                        { borderBottomColor: isDark ? 'rgba(255, 255, 255, 0.07)' : 'rgba(0, 0, 0, 0.06)' },
-                      ]}>
-                      <View
-                        style={[
-                          styles.shiftBadgeMini,
-                          {
-                            backgroundColor: seat.eveningStudent
-                              ? (isDark ? '#245C48' : '#287A5B')
-                              : (isDark ? colors.surface.canvas : '#EEEEEE'),
-                            borderColor: seat.eveningStudent
-                              ? (isDark ? '#55B58D' : '#287A5B')
-                              : (isDark ? colors.surface.border : '#DDD9CE'),
-                            borderWidth: 1,
-                          },
-                        ]}>
-                        <Text
-                          style={[
-                            styles.shiftBadgeMiniText,
-                            { color: seat.eveningStudent ? '#FFFFFF' : colors.text.muted },
-                          ]}>
-                          E
-                        </Text>
-                      </View>
-                      {seat.eveningStudent ? (
-                        <Text style={[styles.expandedStudentName, { color: colors.text.primary }]} numberOfLines={1}>
-                          {seat.eveningStudent.name}
-                        </Text>
-                      ) : (
-                        <Text style={[styles.expandedVacantText, { color: colors.text.muted }]} numberOfLines={1}>
-                          Available
-                        </Text>
-                      )}
-                    </View>
-
-                    {/* Night Shift (no bottom border) */}
-                    <View
-                      style={[
-                        styles.expandedShiftRow,
-                        { borderBottomWidth: 0 },
-                      ]}>
-                      <View
-                        style={[
-                          styles.shiftBadgeMini,
-                          {
-                            backgroundColor: seat.nightStudent
-                              ? (isDark ? '#245C48' : '#287A5B')
-                              : (isDark ? colors.surface.canvas : '#EEEEEE'),
-                            borderColor: seat.nightStudent
-                              ? (isDark ? '#55B58D' : '#287A5B')
-                              : (isDark ? colors.surface.border : '#DDD9CE'),
-                            borderWidth: 1,
-                          },
-                        ]}>
-                        <Text
-                          style={[
-                            styles.shiftBadgeMiniText,
-                            { color: seat.nightStudent ? '#FFFFFF' : colors.text.muted },
-                          ]}>
-                          N
-                        </Text>
-                      </View>
-                      {seat.nightStudent ? (
-                        <Text style={[styles.expandedStudentName, { color: colors.text.primary }]} numberOfLines={1}>
-                          {seat.nightStudent.name}
-                        </Text>
-                      ) : (
-                        <Text style={[styles.expandedVacantText, { color: colors.text.muted }]} numberOfLines={1}>
-                          Available
-                        </Text>
-                      )}
-                    </View>
-                  </View>
-
-                  {/* Real-time Occupancy Indicator Row */}
-                  {(() => {
-                    const occ = occupancyMap[seat.number];
-                    const isDiff = occ?.status === 'occupied_another';
-                    const isAssigned = occ?.status === 'occupied_assigned';
-                    return (
-                      <View style={[styles.expandedOccupancyRow, { borderTopColor: isDark ? 'rgba(255, 255, 255, 0.07)' : 'rgba(0, 0, 0, 0.06)' }]}>
-                        <View style={styles.expandedOccupancyLeft}>
-                          {isDiff ? (
-                            <AlertTriangle size={12} color="#D97706" strokeWidth={2.4} />
-                          ) : isAssigned ? (
-                            <View style={[styles.microStatusDot, { backgroundColor: '#245C48' }]} />
-                          ) : (
-                            <View style={[styles.microStatusDot, { backgroundColor: '#879187' }]} />
-                          )}
-                          <Text
-                            style={[
-                              styles.expandedOccupancyText,
-                              { color: isDiff ? '#D97706' : colors.text.secondary },
-                            ]}
-                            numberOfLines={1}>
-                            {isDiff
-                              ? `⚠️ Seated: ${occ?.occupyingStudent?.name || 'Other'}`
-                              : isAssigned
-                              ? `🟢 Seated: ${occ?.occupyingStudent?.name || 'Assigned'}`
-                              : occ?.status === 'maintenance'
-                              ? '🛠️ Under Maintenance'
-                              : '⚪ Desk Physically Vacant'}
-                          </Text>
-                        </View>
-                        <Text style={[styles.viewDetailsLink, { color: isDark ? colors.brand.primary : '#245C48' }]}>
-                          Details →
-                        </Text>
-                      </View>
-                    );
-                  })()}
-                </TouchableOpacity>
-              );
-            })}
-          </View>
         ) : (
-          // ---------------------------------------------------------------------
-          // COMPACT VIEW: HIGHLY READABLE SEAT CARDS WITH REAL-TIME OCCUPANCY PIN
-          // ---------------------------------------------------------------------
+          /* ULTRA-CLEAN SEAT BOXES: EXCLUSIVELY DISPLAYING THE SEAT NUMBER */
           <View style={styles.compactGrid}>
             {filteredSeats.map((seat) => {
               const catStyles = getCategoryStyles(seat.category);
-              const occ = occupancyMap[seat.number];
-              const isDifferentStudent = occ?.status === 'occupied_another';
-              const isAssignedPresent = occ?.status === 'occupied_assigned';
-              const isRes = occ?.status === 'reserved';
-              const isMaint = occ?.status === 'maintenance';
 
               return (
                 <TouchableOpacity
                   key={seat.number}
-                  activeOpacity={0.78}
+                  activeOpacity={0.75}
                   onPress={() => setSelectedSeat(seat)}
                   style={[
                     styles.seatCard,
                     {
-                      backgroundColor: isDark
-                        ? isDifferentStudent
-                          ? 'rgba(217, 119, 6, 0.16)'
-                          : colors.surface.card
-                        : isDifferentStudent
-                        ? '#FFFBEB'
-                        : catStyles.cardBg,
-                      borderColor: isDifferentStudent
-                        ? '#F59E0B'
-                        : isAssignedPresent
-                        ? '#245C48'
-                        : catStyles.cardBorder,
-                      borderWidth: isDifferentStudent || isAssignedPresent ? 1.5 : 1,
+                      backgroundColor: isDark ? colors.surface.card : catStyles.cardBg,
+                      borderColor: catStyles.cardBorder,
+                      borderWidth: 1,
                       width: isMobile ? '22%' : isTablet ? 72 : 76,
-                      height: isMobile ? 54 : 58,
-                      position: 'relative',
+                      height: isMobile ? 52 : 56,
                       justifyContent: 'center',
                       alignItems: 'center',
                     },
                   ]}>
-                  {/* Real-time status indicator pin at top right */}
-                  <View style={styles.seatCardMicroIndicator}>
-                    {isDifferentStudent ? (
-                      <View style={styles.mismatchAlertBadgeMini}>
-                        <AlertTriangle size={8} color="#FFFFFF" strokeWidth={2.8} />
-                      </View>
-                    ) : isAssignedPresent ? (
-                      <View style={[styles.microStatusDot, { backgroundColor: '#245C48' }]} />
-                    ) : isRes ? (
-                      <View style={[styles.microStatusDot, { backgroundColor: '#B58A4A' }]} />
-                    ) : isMaint ? (
-                      <Wrench size={8} color="#628194" />
-                    ) : (
-                      <View style={[styles.microStatusDot, { backgroundColor: '#D6DCE3' }]} />
-                    )}
-                  </View>
-
-                  {/* Seat Number Text */}
+                  {/* Seat Number Only */}
                   <Text
                     style={[
                       styles.seatNumberMainText,
                       {
-                        color: isDifferentStudent ? (isDark ? '#FCD34D' : '#92400E') : colors.text.primary,
+                        color: colors.text.primary,
                         fontFamily: Platform.OS === 'web' ? '"DM Serif Display", Lora, Georgia, serif' : 'serif',
                       },
                     ]}>
