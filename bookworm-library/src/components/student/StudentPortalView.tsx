@@ -42,8 +42,9 @@ import {
 } from 'lucide-react-native';
 import { useThemeMode } from '@/context/ThemeContext';
 import { ClaymorphicShadows, ClaymorphicShadowsDark } from '@/constants/dashboard-theme';
-import { attendanceService, AttendanceRecord } from '@/services/attendance-service';
+import { attendanceService, AttendanceRecord, StudentAttendanceContext } from '@/services/attendance-service';
 import { LibraryTenant, DEFAULT_TENANT } from '@/constants/tenants';
+import { CameraView, useCameraPermissions } from 'expo-camera';
 
 interface StudentPortalViewProps {
   studentData?: {
@@ -77,7 +78,6 @@ export function StudentPortalView({
   const isDesktop = width >= 1024;
   const isMobile = width < 768;
 
-  const activeTenantId = studentData.tenantId || currentTenant.id;
 
   // Scanner modal states
   const [isScannerOpen, setIsScannerOpen] = useState(false);
@@ -90,11 +90,16 @@ export function StudentPortalView({
     record?: AttendanceRecord;
     errorType?: string;
   } | null>(null);
+  const [attendanceContext, setAttendanceContext] = useState<StudentAttendanceContext | null>(null);
+  const [attendanceLoading, setAttendanceLoading] = useState(true);
+  const [attendanceBusy, setAttendanceBusy] = useState(false);
+  const [attendanceError, setAttendanceError] = useState('');
+  const [selectedSeatId, setSelectedSeatId] = useState<string | undefined>();
+  const [cameraPermission, requestCameraPermission] = useCameraPermissions();
+  const [scannerEnabled, setScannerEnabled] = useState(true);
 
   // Student Attendance Records state
-  const [historyRecords, setHistoryRecords] = useState<AttendanceRecord[]>(() =>
-    attendanceService.getStudentRecords(activeTenantId, studentData.id)
-  );
+  const [historyRecords, setHistoryRecords] = useState<AttendanceRecord[]>([]);
 
   // Check if student currently has active check-in
   const activeCheckIn = useMemo(() => {
@@ -103,38 +108,29 @@ export function StudentPortalView({
     );
   }, [historyRecords]);
 
-  const refreshHistory = () => {
-    setHistoryRecords(attendanceService.getStudentRecords(activeTenantId, studentData.id));
+  const refreshHistory = async () => {
+    try {
+      const context = await attendanceService.getStudentContext();
+      setAttendanceContext(context);
+      if (context.library_id) setHistoryRecords(await attendanceService.getRecords(context.library_id));
+      setAttendanceError(context.eligible ? '' : context.message || 'Attendance is unavailable.');
+    } catch (error: any) { setAttendanceError(error.message || 'Could not load attendance.'); }
+    finally { setAttendanceLoading(false); }
   };
+  useEffect(() => { const timer = setTimeout(() => { void refreshHistory(); }, 0); return () => clearTimeout(timer); }, []);
 
   // Perform Scan
-  const handleExecuteScan = (payload: string) => {
-    if (!payload.trim()) return;
-    const result = attendanceService.registerScan(activeTenantId, studentData.id, payload);
-    setScanResult({
-      show: true,
-      success: result.success,
-      message: result.message,
-      action: result.action,
-      record: result.record,
-      errorType: result.errorType,
-    });
-    refreshHistory();
-  };
-
-  // Quick 1-tap test scans (for testing static & dynamic tokens)
-  const handleTestScanStatic = () => {
-    const activeStatic = attendanceService.getActiveStaticQR(activeTenantId);
-    if (!activeStatic) {
-      handleExecuteScan('INVALID-CODE');
-      return;
-    }
-    handleExecuteScan(activeStatic.token);
-  };
-
-  const handleTestScanDynamic = () => {
-    const session = attendanceService.getDynamicSession(activeTenantId);
-    handleExecuteScan(session.currentToken);
+  const handleExecuteScan = async (payload: string) => {
+    if (!payload.trim() || attendanceBusy) return;
+    setAttendanceBusy(true); setAttendanceError('');
+    try {
+      const result = await attendanceService.scan(payload, selectedSeatId);
+      setScanResult({ show: true, success: true, message: result.action === 'check_in' ? 'Check-in recorded.' : 'Check-out recorded.', action: result.action });
+      setManualCodeInput(''); setSelectedSeatId(undefined);
+      await refreshHistory();
+    } catch (error: any) {
+      setScanResult({ show: true, success: false, message: error.message || 'Attendance could not be recorded.' });
+    } finally { setAttendanceBusy(false); }
   };
 
   return (
@@ -286,18 +282,7 @@ export function StudentPortalView({
               </Text>
             </TouchableOpacity>
 
-            <TouchableOpacity
-              activeOpacity={0.85}
-              onPress={activeCheckIn ? handleTestScanStatic : handleTestScanStatic}
-              style={[
-                styles.quickScanSecondaryBtn,
-                { borderColor: isDark ? '#55B58D' : '#245C48' },
-              ]}>
-              <QrCode size={16} color={isDark ? '#55B58D' : '#245C48'} />
-              <Text style={[styles.quickScanSecondaryBtnText, { color: isDark ? '#55B58D' : '#245C48' }]}>
-                1-Tap Instant Punch
-              </Text>
-            </TouchableOpacity>
+            {attendanceLoading && <Text style={{ color: colors.text.muted }}>Loading attendance status…</Text>}
           </View>
         </View>
 
@@ -308,9 +293,10 @@ export function StudentPortalView({
           ]}>
           <QrCode size={48} color={isDark ? '#55B58D' : '#245C48'} strokeWidth={1.8} />
           <Text style={[styles.qrHeroTag, { color: colors.text.secondary }]}>Smart QR Terminal</Text>
-          <Text style={[styles.qrHeroSub, { color: colors.text.muted }]}>Static & Dynamic Ready</Text>
+          <Text style={[styles.qrHeroSub, { color: colors.text.muted }]}>Secure library QR</Text>
         </View>
       </View>
+      {!!attendanceError && <Text accessibilityRole="alert" style={{ color: '#A44', paddingHorizontal: 8 }}>{attendanceError}</Text>}
 
       {/* ========================================================================= */}
       {/* 3. DIGITAL SEAT PASS CARD                                                 */}
@@ -661,55 +647,25 @@ export function StudentPortalView({
                   LibX Attendance Camera Scanner
                 </Text>
               </View>
-              <TouchableOpacity onPress={() => setIsScannerOpen(false)}>
+              <TouchableOpacity onPress={() => { setIsScannerOpen(false); setScannerEnabled(true); }}>
                 <X size={20} color={colors.text.muted} />
               </TouchableOpacity>
             </View>
 
-            {/* Simulated Live Viewfinder */}
-            <View style={styles.viewfinderContainer}>
-              <View style={styles.viewfinderFrame}>
-                <View style={[styles.viewfinderCorner, styles.cornerTL]} />
-                <View style={[styles.viewfinderCorner, styles.cornerTR]} />
-                <View style={[styles.viewfinderCorner, styles.cornerBL]} />
-                <View style={[styles.viewfinderCorner, styles.cornerBR]} />
+            {cameraPermission?.granted ? <CameraView
+              style={styles.viewfinderContainer}
+              facing="back"
+              barcodeScannerSettings={{ barcodeTypes: ['qr'] }}
+              onBarcodeScanned={scannerEnabled ? ({ data }) => { setScannerEnabled(false); void handleExecuteScan(data); } : undefined}
+            /> : <View style={[styles.viewfinderContainer,{padding:20}]}><Text style={{color:'#E8EEE5',textAlign:'center'}}>{cameraPermission?.canAskAgain === false ? 'Camera access is disabled. Enable it in device settings or enter the QR token below.' : 'Allow camera access to scan the library attendance QR.'}</Text><TouchableOpacity onPress={() => void requestCameraPermission()} style={[styles.manualSubmitBtn,{backgroundColor:'#287A5B',padding:10,marginTop:14}]}><Text style={styles.manualSubmitBtnText}>Allow camera</Text></TouchableOpacity></View>}
 
-                {/* Animated Laser Scanning Line */}
-                <View style={styles.laserScanLine} />
+            {attendanceContext?.requires_seat && <View style={styles.scannerControlsGroup}><Text style={[styles.scannerControlsLabel,{color:colors.text.primary}]}>Choose an available seat</Text><View style={styles.testButtonsRow}>{attendanceContext.seats.map(seat=><TouchableOpacity key={seat.id} onPress={()=>setSelectedSeatId(seat.id)} style={[styles.testScanBtn,{backgroundColor:selectedSeatId===seat.id?'#287A5B':'#E8EEE5'}]}><Text style={{color:selectedSeatId===seat.id?'#FFF':'#245C48',fontWeight:'700'}}>{seat.seat_number}{seat.status==='assigned'?' · Assigned':''}</Text></TouchableOpacity>)}{attendanceContext.seats.length===0&&<Text style={{color:colors.text.muted}}>No seats are currently available.</Text>}</View></View>}
 
-                <Text style={styles.viewfinderPrompt}>
-                  Align Library QR Code within the frame
-                </Text>
-              </View>
-            </View>
-
-            {/* Quick Testing Actions (Static & Dynamic QR) */}
+            {/* Manual token entry remains available when camera access is unavailable. */}
             <View style={styles.scannerControlsGroup}>
               <Text style={[styles.scannerControlsLabel, { color: colors.text.muted }]}>
-                Instant Terminal Punch (One-Click Verification)
+                Scan the library QR or enter its token
               </Text>
-              <View style={styles.testButtonsRow}>
-                <TouchableOpacity
-                  activeOpacity={0.8}
-                  onPress={handleTestScanStatic}
-                  style={[styles.testScanBtn, { backgroundColor: isDark ? '#203A2D' : '#E8EEE5' }]}>
-                  <QrCode size={14} color="#245C48" />
-                  <Text style={[styles.testScanBtnText, { color: '#245C48' }]}>
-                    Scan Static Entrance QR
-                  </Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  activeOpacity={0.8}
-                  onPress={handleTestScanDynamic}
-                  style={[styles.testScanBtn, { backgroundColor: isDark ? '#2C2B1B' : '#FEF8EA' }]}>
-                  <Clock size={14} color="#B58A4A" />
-                  <Text style={[styles.testScanBtnText, { color: '#B58A4A' }]}>
-                    Scan Dynamic Kiosk QR
-                  </Text>
-                </TouchableOpacity>
-              </View>
-
               {/* Manual Code Entry */}
               <View style={styles.manualEntryRow}>
                 <TextInput
@@ -728,12 +684,11 @@ export function StudentPortalView({
                 />
                 <TouchableOpacity
                   onPress={() => {
-                    handleExecuteScan(manualCodeInput);
-                    setManualCodeInput('');
+                    void handleExecuteScan(manualCodeInput);
                   }}
                   style={[styles.manualSubmitBtn, { backgroundColor: isDark ? '#245C48' : '#287A5B' }]}>
                   <Check size={14} color="#FFFFFF" />
-                  <Text style={styles.manualSubmitBtnText}>Punch</Text>
+                  <Text style={styles.manualSubmitBtnText}>{attendanceBusy?'Checking…':'Submit'}</Text>
                 </TouchableOpacity>
               </View>
             </View>
@@ -847,7 +802,7 @@ export function StudentPortalView({
             <TouchableOpacity
               onPress={() => {
                 setScanResult(null);
-                setIsScannerOpen(false);
+                setIsScannerOpen(false); setScannerEnabled(true);
               }}
               style={[
                 styles.resultDismissBtn,
