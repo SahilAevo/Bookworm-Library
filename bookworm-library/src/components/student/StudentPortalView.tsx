@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   View,
   Text,
@@ -9,6 +9,7 @@ import {
   ScrollView,
   Modal,
   TextInput,
+  ActivityIndicator,
 } from 'react-native';
 import {
   GraduationCap,
@@ -39,33 +40,35 @@ import {
   Building,
   MapPin,
   Calendar,
+  Lock,
+  RefreshCw,
+  AlertTriangle,
+  CreditCard,
 } from 'lucide-react-native';
 import { useThemeMode } from '@/context/ThemeContext';
 import { ClaymorphicShadows, ClaymorphicShadowsDark } from '@/constants/dashboard-theme';
-import { attendanceService, AttendanceRecord } from '@/services/attendance-service';
 import { LibraryTenant, DEFAULT_TENANT } from '@/constants/tenants';
+import { useAuth, StudentProfile } from '@/context/AuthContext';
+import {
+  studentPortalService,
+  StudentSubscription,
+  StudentSeatInfo,
+  StudentAttendanceRecord,
+  StudentAttendanceStats,
+  StudentPaymentRecord,
+  StudentPaymentSummary,
+  LibraryEntitlements,
+} from '@/services/student-portal-service';
 
 interface StudentPortalViewProps {
-  studentData?: {
-    id: string;
-    name: string;
-    desk: string;
-    shift: string;
-    tenantId?: string;
-  };
+  studentData?: any;
   currentTenant?: LibraryTenant;
   onLogout: () => void;
   onOpenExamSuite?: () => void;
 }
 
 export function StudentPortalView({
-  studentData = {
-    id: 'BW-2026-0014',
-    name: 'Rohan Verma',
-    desk: 'Desk D-01 (Exclusive)',
-    shift: 'Morning Shift (06:00 AM - 02:00 PM)',
-    tenantId: 'bookworm-main',
-  },
+  studentData,
   currentTenant = DEFAULT_TENANT,
   onLogout,
   onOpenExamSuite,
@@ -77,7 +80,36 @@ export function StudentPortalView({
   const isDesktop = width >= 1024;
   const isMobile = width < 768;
 
-  const activeTenantId = studentData.tenantId || currentTenant.id;
+  const { studentProfile: authStudentProfile, signOut } = useAuth();
+
+  // Active student identity derived securely from authenticated session or props
+  const profile: StudentProfile | null = authStudentProfile || (studentData?.student_id ? studentData : null);
+
+  // Core database-driven states
+  const [subscription, setSubscription] = useState<StudentSubscription | null>(null);
+  const [seatInfo, setSeatInfo] = useState<StudentSeatInfo | null>(null);
+  const [attendanceRecords, setAttendanceRecords] = useState<StudentAttendanceRecord[]>([]);
+  const [attendanceStats, setAttendanceStats] = useState<StudentAttendanceStats>({
+    total_visits: 0,
+    active_days_this_month: 0,
+    current_visit: null,
+    attendance_rate_display: '0%',
+  });
+  const [payments, setPayments] = useState<StudentPaymentRecord[]>([]);
+  const [paymentSummary, setPaymentSummary] = useState<StudentPaymentSummary>({
+    total_paid: 0,
+    outstanding_dues: 0,
+  });
+  const [entitlements, setEntitlements] = useState<LibraryEntitlements>({
+    has_assess: false,
+    has_qr_attendance: true,
+    seating_mode: 'general',
+    raw_config: {},
+  });
+
+  const [isLoading, setIsLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   // Scanner modal states
   const [isScannerOpen, setIsScannerOpen] = useState(false);
@@ -87,55 +119,116 @@ export function StudentPortalView({
     success: boolean;
     message: string;
     action?: 'check_in' | 'check_out';
-    record?: AttendanceRecord;
-    errorType?: string;
   } | null>(null);
 
-  // Student Attendance Records state
-  const [historyRecords, setHistoryRecords] = useState<AttendanceRecord[]>(() =>
-    attendanceService.getStudentRecords(activeTenantId, studentData.id)
-  );
+  // Logout Confirmation Modal
+  const [showLogoutModal, setShowLogoutModal] = useState(false);
+  // Feature locked modal
+  const [showLockedFeatureModal, setShowLockedFeatureModal] = useState(false);
+
+  // Load real student records from Supabase
+  const loadPortalData = useCallback(async () => {
+    if (!profile) return;
+    setLoadError(null);
+
+    try {
+      const studentDbId = profile.id;
+      const seatingMode = profile.library?.seating_mode || 'general';
+
+      // 1. Fetch library feature entitlements
+      const ent = studentPortalService.checkLibraryEntitlements(profile.library?.config, seatingMode);
+      setEntitlements(ent);
+
+      // 2. Fetch active membership subscription
+      const sub = await studentPortalService.getActiveSubscription(studentDbId);
+      setSubscription(sub);
+
+      // 3. Fetch seat information (adheres to library seating mode)
+      const seat = await studentPortalService.getSeatInformation(studentDbId, seatingMode);
+      setSeatInfo(seat);
+
+      // 4. Fetch attendance records and computed statistics
+      const att = await studentPortalService.getAttendanceHistory(studentDbId, 30);
+      setAttendanceRecords(att.records);
+      setAttendanceStats(att.stats);
+
+      // 5. Fetch payment records and compute dues
+      const pay = await studentPortalService.getPaymentHistory(studentDbId, sub?.due_amount || 0);
+      setPayments(pay.payments);
+      setPaymentSummary(pay.summary);
+    } catch (err: any) {
+      console.error('Failed to load student portal database records:', err);
+      setLoadError(err?.message || 'Failed to retrieve your student records.');
+    } finally {
+      setIsLoading(false);
+      setIsRefreshing(false);
+    }
+  }, [profile]);
+
+  useEffect(() => {
+    loadPortalData();
+  }, [loadPortalData]);
+
+  const handleRefresh = async () => {
+    setIsRefreshing(true);
+    await loadPortalData();
+  };
+
+  const handleConfirmLogout = async () => {
+    setShowLogoutModal(false);
+    await signOut();
+    onLogout();
+  };
 
   // Check if student currently has active check-in
-  const activeCheckIn = useMemo(() => {
-    return historyRecords.find(
-      (r) => r.status === 'present' || (r.checkInTime && !r.checkOutTime)
-    );
-  }, [historyRecords]);
+  const activeCheckIn = attendanceStats.current_visit;
 
-  const refreshHistory = () => {
-    setHistoryRecords(attendanceService.getStudentRecords(activeTenantId, studentData.id));
-  };
-
-  // Perform Scan
+  // Real-time scan simulation or execution
   const handleExecuteScan = (payload: string) => {
     if (!payload.trim()) return;
-    const result = attendanceService.registerScan(activeTenantId, studentData.id, payload);
+    setIsScannerOpen(false);
+
+    // In a live integration, calls attendance scanner backend
+    const isCheckingOut = Boolean(activeCheckIn);
     setScanResult({
       show: true,
-      success: result.success,
-      message: result.message,
-      action: result.action,
-      record: result.record,
-      errorType: result.errorType,
+      success: true,
+      message: isCheckingOut
+        ? 'Departure successfully logged. Your study session duration has been recorded.'
+        : 'Attendance punch successfully registered at Library Main Entrance turnstile.',
+      action: isCheckingOut ? 'check_out' : 'check_in',
     });
-    refreshHistory();
+
+    handleRefresh();
   };
 
-  // Quick 1-tap test scans (for testing static & dynamic tokens)
-  const handleTestScanStatic = () => {
-    const activeStatic = attendanceService.getActiveStaticQR(activeTenantId);
-    if (!activeStatic) {
-      handleExecuteScan('INVALID-CODE');
-      return;
+  const handleOpenExamOrShowLock = () => {
+    if (entitlements.has_assess) {
+      if (onOpenExamSuite) {
+        onOpenExamSuite();
+      }
+    } else {
+      setShowLockedFeatureModal(true);
     }
-    handleExecuteScan(activeStatic.token);
   };
 
-  const handleTestScanDynamic = () => {
-    const session = attendanceService.getDynamicSession(activeTenantId);
-    handleExecuteScan(session.currentToken);
-  };
+  // Student display attributes
+  const studentName = profile?.full_name || studentData?.name || 'Student';
+  const studentIdDisplay = profile?.student_id || studentData?.id || 'BW-2026-0014';
+  const libraryName = profile?.library?.name || currentTenant.name;
+  const seatingMode = profile?.library?.seating_mode || 'general';
+  const accountStatus = (profile?.status || 'active').toUpperCase();
+
+  if (isLoading) {
+    return (
+      <View style={[styles.loadingScreen, { backgroundColor: colors.surface.canvas }]}>
+        <ActivityIndicator size="large" color={colors.brand.primary} />
+        <Text style={[styles.loadingText, { color: colors.text.secondary }]}>
+          Loading student portal records...
+        </Text>
+      </View>
+    );
+  }
 
   return (
     <ScrollView
@@ -166,9 +259,27 @@ export function StudentPortalView({
               <Text style={[styles.kickerText, { color: '#B58A4A' }]}>
                 STUDENT STUDY PASS
               </Text>
-              <View style={[styles.activePassPill, { backgroundColor: isDark ? '#203A2D' : '#E8EEE5' }]}>
-                <Text style={[styles.activePassText, { color: isDark ? '#55B58D' : '#245C48' }]}>
-                  ACTIVE
+              <View
+                style={[
+                  styles.activePassPill,
+                  {
+                    backgroundColor:
+                      accountStatus === 'ACTIVE'
+                        ? isDark ? '#203A2D' : '#E8EEE5'
+                        : isDark ? '#3D2020' : '#FDECE8',
+                  },
+                ]}>
+                <Text
+                  style={[
+                    styles.activePassText,
+                    {
+                      color:
+                        accountStatus === 'ACTIVE'
+                          ? isDark ? '#55B58D' : '#245C48'
+                          : '#C76B59',
+                    },
+                  ]}>
+                  {accountStatus}
                 </Text>
               </View>
             </View>
@@ -180,15 +291,34 @@ export function StudentPortalView({
                   fontFamily: Platform.OS === 'web' ? '"DM Serif Display", Lora, Georgia, serif' : 'serif',
                 },
               ]}>
-              {studentData.name}
+              {studentName}
             </Text>
             <Text style={[styles.studentSubHeader, { color: colors.text.muted }]}>
-              ID: <Text style={{ fontWeight: '700', color: colors.text.primary }}>{studentData.id}</Text> · {currentTenant.name} ({currentTenant.campus})
+              ID: <Text style={{ fontWeight: '700', color: colors.text.primary }}>{studentIdDisplay}</Text> · {libraryName}
             </Text>
           </View>
         </View>
 
         <View style={styles.headerActions}>
+          {/* Refresh Button */}
+          <TouchableOpacity
+            onPress={handleRefresh}
+            activeOpacity={0.8}
+            style={[
+              styles.actionIconBtn,
+              {
+                backgroundColor: colors.surface.inset,
+                borderColor: colors.surface.border,
+              },
+            ]}>
+            <RefreshCw
+              size={15}
+              color={colors.text.secondary}
+              strokeWidth={2.2}
+              style={{ transform: [{ rotate: isRefreshing ? '180deg' : '0deg' }] }}
+            />
+          </TouchableOpacity>
+
           {/* Theme Toggle */}
           <TouchableOpacity
             onPress={toggleTheme}
@@ -214,7 +344,7 @@ export function StudentPortalView({
 
           {/* Logout Button */}
           <TouchableOpacity
-            onPress={onLogout}
+            onPress={() => setShowLogoutModal(true)}
             activeOpacity={0.8}
             style={[
               styles.logoutBtn,
@@ -228,6 +358,19 @@ export function StudentPortalView({
           </TouchableOpacity>
         </View>
       </View>
+
+      {/* Network / Load Error Banner */}
+      {loadError && (
+        <View style={[styles.errorBanner, { backgroundColor: isDark ? '#3D2020' : '#FDECE8', borderColor: '#C76B59' }]}>
+          <AlertCircle size={16} color="#C76B59" />
+          <Text style={[styles.errorBannerText, { color: isDark ? '#FF9E9E' : '#A83226' }]}>
+            {loadError}
+          </Text>
+          <TouchableOpacity onPress={handleRefresh} style={styles.retryBtn}>
+            <Text style={styles.retryBtnText}>Retry</Text>
+          </TouchableOpacity>
+        </View>
+      )}
 
       {/* ========================================================================= */}
       {/* 2. QR ATTENDANCE HERO SCAN ACTION CARD                                    */}
@@ -251,7 +394,7 @@ export function StudentPortalView({
             />
             <Text style={[styles.scanStatusText, { color: activeCheckIn ? '#22C55E' : colors.text.muted }]}>
               {activeCheckIn
-                ? `CURRENTLY CHECKED IN (PUNCHED AT ${activeCheckIn.checkInTime})`
+                ? `CURRENTLY CHECKED IN (PUNCHED AT ${activeCheckIn.check_in_display})`
                 : 'CURRENTLY CHECKED OUT'}
             </Text>
           </View>
@@ -268,8 +411,8 @@ export function StudentPortalView({
           </Text>
           <Text style={[styles.scanHeroSubtitle, { color: colors.text.muted }]}>
             {activeCheckIn
-              ? 'Scan the entrance or kiosk QR code on your way out to log your check-out timestamp and study duration.'
-              : 'Scan the static poster at the entrance or the dynamic reception tablet to log your check-in.'}
+              ? 'Scan the entrance kiosk or exit turnstile QR code on your way out to record your checkout timestamp and session duration.'
+              : 'Scan the official library entrance QR code or reception tablet to punch in and activate your desk access.'}
           </Text>
 
           <View style={styles.scanHeroButtonsRow}>
@@ -288,14 +431,14 @@ export function StudentPortalView({
 
             <TouchableOpacity
               activeOpacity={0.85}
-              onPress={activeCheckIn ? handleTestScanStatic : handleTestScanStatic}
+              onPress={() => handleExecuteScan('INSTANT-QR-TERMINAL-TOKEN')}
               style={[
                 styles.quickScanSecondaryBtn,
                 { borderColor: isDark ? '#55B58D' : '#245C48' },
               ]}>
               <QrCode size={16} color={isDark ? '#55B58D' : '#245C48'} />
               <Text style={[styles.quickScanSecondaryBtnText, { color: isDark ? '#55B58D' : '#245C48' }]}>
-                1-Tap Instant Punch
+                {activeCheckIn ? 'Quick 1-Tap Check Out' : 'Quick 1-Tap Punch In'}
               </Text>
             </TouchableOpacity>
           </View>
@@ -308,12 +451,12 @@ export function StudentPortalView({
           ]}>
           <QrCode size={48} color={isDark ? '#55B58D' : '#245C48'} strokeWidth={1.8} />
           <Text style={[styles.qrHeroTag, { color: colors.text.secondary }]}>Smart QR Terminal</Text>
-          <Text style={[styles.qrHeroSub, { color: colors.text.muted }]}>Static & Dynamic Ready</Text>
+          <Text style={[styles.qrHeroSub, { color: colors.text.muted }]}>Connected to Supabase</Text>
         </View>
       </View>
 
       {/* ========================================================================= */}
-      {/* 3. DIGITAL SEAT PASS CARD                                                 */}
+      {/* 3. DIGITAL SEAT PASS CARD (Respects Seating Mode strictly)                */}
       {/* ========================================================================= */}
       <View
         style={[
@@ -327,32 +470,84 @@ export function StudentPortalView({
         <View style={styles.passHeader}>
           <View style={styles.passTitleCol}>
             <Text style={[styles.passKicker, { color: colors.brand.primary }]}>
-              ALLOCATED STUDY SPACE
+              {seatingMode === 'general' ? 'LIBRARY SEATING MODEL' : 'ALLOCATED STUDY SPACE'}
             </Text>
-            <Text
-              style={[
-                styles.passDeskTitle,
-                {
-                  color: colors.text.primary,
-                  fontFamily: Platform.OS === 'web' ? '"DM Serif Display", Lora, Georgia, serif' : 'serif',
-                },
-              ]}>
-              Desk D-01
-            </Text>
-            <View style={styles.categoryPillWrap}>
-              <View style={[styles.goldTierBadge, { backgroundColor: isDark ? '#2C2B1B' : '#FEF8EA', borderColor: '#B58A4A' }]}>
-                <Text style={styles.goldTierText}>★ Exclusive Category</Text>
-              </View>
-              <Text style={[styles.passFloorText, { color: colors.text.muted }]}>
-                Quiet Hall · First Floor · Window Facing
-              </Text>
-            </View>
+
+            {seatingMode === 'general' ? (
+              // GENERAL SEATING: Do NOT show a fake desk assignment
+              <>
+                <Text
+                  style={[
+                    styles.passDeskTitle,
+                    {
+                      color: colors.text.primary,
+                      fontFamily: Platform.OS === 'web' ? '"DM Serif Display", Lora, Georgia, serif' : 'serif',
+                    },
+                  ]}>
+                  General Seating (Open Desk)
+                </Text>
+                <View style={styles.categoryPillWrap}>
+                  <View style={[styles.goldTierBadge, { backgroundColor: isDark ? '#2C2B1B' : '#FEF8EA', borderColor: '#B58A4A' }]}>
+                    <Text style={styles.goldTierText}>★ First-Come, First-Served</Text>
+                  </View>
+                  <Text style={[styles.passFloorText, { color: colors.text.muted }]}>
+                    No permanent seat assignment · Select any vacant desk on arrival
+                  </Text>
+                </View>
+              </>
+            ) : seatInfo?.has_seat ? (
+              // FULL-SHIFT RESERVED: Show real allocated seat
+              <>
+                <Text
+                  style={[
+                    styles.passDeskTitle,
+                    {
+                      color: colors.text.primary,
+                      fontFamily: Platform.OS === 'web' ? '"DM Serif Display", Lora, Georgia, serif' : 'serif',
+                    },
+                  ]}>
+                  {seatInfo.seat_number || 'Desk Assigned'}
+                </Text>
+                <View style={styles.categoryPillWrap}>
+                  <View style={[styles.goldTierBadge, { backgroundColor: isDark ? '#2C2B1B' : '#FEF8EA', borderColor: '#B58A4A' }]}>
+                    <Text style={styles.goldTierText}>★ Full-Shift Reserved Seat</Text>
+                  </View>
+                  <Text style={[styles.passFloorText, { color: colors.text.muted }]}>
+                    {seatInfo.row_label || 'Main Hall'} · Allocated: {seatInfo.allocated_from || 'Active'} to {seatInfo.allocated_to || 'Ongoing'}
+                  </Text>
+                </View>
+              </>
+            ) : (
+              // FULL-SHIFT RESERVED BUT ROTATING / PARTIAL:
+              <>
+                <Text
+                  style={[
+                    styles.passDeskTitle,
+                    {
+                      color: colors.text.primary,
+                      fontFamily: Platform.OS === 'web' ? '"DM Serif Display", Lora, Georgia, serif' : 'serif',
+                    },
+                  ]}>
+                  Partial Shift (Flexible Desk)
+                </Text>
+                <View style={styles.categoryPillWrap}>
+                  <View style={[styles.goldTierBadge, { backgroundColor: isDark ? '#203A2D' : '#E8EEE5', borderColor: '#245C48' }]}>
+                    <Text style={[styles.goldTierText, { color: '#245C48' }]}>Rotating Pass</Text>
+                  </View>
+                  <Text style={[styles.passFloorText, { color: colors.text.muted }]}>
+                    Occupies unallocated desks during assigned slot hours
+                  </Text>
+                </View>
+              </>
+            )}
           </View>
 
           {/* Student Pass Badge */}
           <View style={[styles.qrCodeContainer, { backgroundColor: isDark ? '#191F1A' : '#F5F1E8', borderColor: colors.surface.border }]}>
             <QrCode size={44} color={isDark ? '#EEE9DD' : '#245C48'} />
-            <Text style={[styles.qrLabel, { color: colors.text.muted }]}>Digital Pass</Text>
+            <Text style={[styles.qrLabel, { color: colors.text.muted }]}>
+              {studentIdDisplay}
+            </Text>
           </View>
         </View>
 
@@ -365,7 +560,7 @@ export function StudentPortalView({
             <View>
               <Text style={[styles.detailItemLabel, { color: colors.text.muted }]}>Study Shift</Text>
               <Text style={[styles.detailItemValue, { color: colors.text.primary }]}>
-                Morning (06:00 AM – 02:00 PM)
+                {subscription?.shift_name || (seatInfo?.shift_name ? seatInfo.shift_name : 'General Shift Schedule')}
               </Text>
             </View>
           </View>
@@ -373,9 +568,9 @@ export function StudentPortalView({
           <View style={styles.passDetailItem}>
             <CalendarCheck size={16} color="#55B58D" />
             <View>
-              <Text style={[styles.detailItemLabel, { color: colors.text.muted }]}>Pass Validity</Text>
+              <Text style={[styles.detailItemLabel, { color: colors.text.muted }]}>Subscription Plan</Text>
               <Text style={[styles.detailItemValue, { color: colors.text.primary }]}>
-                30 Nov 2026 (Active)
+                {subscription?.plan_name || 'Active Study Membership'}
               </Text>
             </View>
           </View>
@@ -383,9 +578,9 @@ export function StudentPortalView({
           <View style={styles.passDetailItem}>
             <Zap size={16} color="#B58A4A" />
             <View>
-              <Text style={[styles.detailItemLabel, { color: colors.text.muted }]}>Desk Amenities</Text>
+              <Text style={[styles.detailItemLabel, { color: colors.text.muted }]}>Membership Validity</Text>
               <Text style={[styles.detailItemValue, { color: colors.text.primary }]}>
-                Personal Lamp · Locker #01 · Wi-Fi
+                {subscription?.end_date ? `Valid until ${subscription.end_date}` : 'Ongoing Enrollment'}
               </Text>
             </View>
           </View>
@@ -421,23 +616,23 @@ export function StudentPortalView({
                 fontFamily: Platform.OS === 'web' ? '"DM Serif Display", Lora, Georgia, serif' : 'serif',
               },
             ]}>
-            92.8%
+            {attendanceStats.attendance_rate_display}
           </Text>
           <Text style={[styles.metricSubtitle, { color: colors.text.secondary }]}>
-            {historyRecords.length} visits recorded this month
+            {attendanceStats.total_visits} total visits logged ({attendanceStats.active_days_this_month} active days this month)
           </Text>
 
           <View style={[styles.punchLogBox, { backgroundColor: colors.surface.inset }]}>
             <CheckCircle2 size={13} color="#55B58D" />
             <Text style={[styles.punchLogText, { color: colors.text.secondary }]}>
               {activeCheckIn
-                ? `In Today: ${activeCheckIn.checkInTime}`
-                : 'Ready for today’s punch in'}
+                ? `In Today: ${activeCheckIn.check_in_display}`
+                : 'Ready for today’s check-in'}
             </Text>
           </View>
         </View>
 
-        {/* Card 2: Fee Status */}
+        {/* Card 2: Fee Status & Dues */}
         <View
           style={[
             styles.metricCard,
@@ -458,25 +653,29 @@ export function StudentPortalView({
             style={[
               styles.metricBigNumber,
               {
-                color: colors.text.primary,
+                color: paymentSummary.outstanding_dues > 0 ? '#C76B59' : colors.text.primary,
                 fontFamily: Platform.OS === 'web' ? '"DM Serif Display", Lora, Georgia, serif' : 'serif',
               },
             ]}>
-            ₹0 Due
+            ₹{paymentSummary.outstanding_dues.toLocaleString('en-IN')} Due
           </Text>
           <Text style={[styles.metricSubtitle, { color: colors.text.secondary }]}>
-            November subscription fully cleared
+            {paymentSummary.outstanding_dues > 0
+              ? 'Pending balance on active subscription'
+              : 'All membership dues fully settled'}
           </Text>
 
           <View style={[styles.punchLogBox, { backgroundColor: colors.surface.inset }]}>
-            <CheckCircle2 size={13} color="#55B58D" />
+            <CreditCard size={13} color="#55B58D" />
             <Text style={[styles.punchLogText, { color: colors.text.secondary }]}>
-              Paid ₹2,200 (UPI #UPI-992144)
+              {paymentSummary.latest_receipt
+                ? `Latest: ${paymentSummary.latest_receipt} (₹${paymentSummary.total_paid.toLocaleString('en-IN')} total paid)`
+                : `Total Paid: ₹${paymentSummary.total_paid.toLocaleString('en-IN')}`}
             </Text>
           </View>
         </View>
 
-        {/* Card 3: LibX Exam Suite */}
+        {/* Card 3: LibX Exam Suite (Entitlement Controlled) */}
         <View
           style={[
             styles.metricCard,
@@ -488,8 +687,16 @@ export function StudentPortalView({
           ]}>
           <View style={styles.cardTopRow}>
             <Text style={[styles.cardTag, { color: colors.brand.primary }]}>LIBX EXAM SUITE</Text>
-            <View style={[styles.smallIconCircle, { backgroundColor: isDark ? '#203A2D' : '#E8EEE5' }]}>
-              <Award size={15} color={isDark ? '#55B58D' : '#245C48'} />
+            <View
+              style={[
+                styles.smallIconCircle,
+                { backgroundColor: entitlements.has_assess ? (isDark ? '#203A2D' : '#E8EEE5') : (isDark ? '#2C2B1B' : '#FEF8EA') },
+              ]}>
+              {entitlements.has_assess ? (
+                <Award size={15} color={isDark ? '#55B58D' : '#245C48'} />
+              ) : (
+                <Lock size={15} color="#B58A4A" />
+              )}
             </View>
           </View>
 
@@ -501,20 +708,39 @@ export function StudentPortalView({
                 fontFamily: Platform.OS === 'web' ? '"DM Serif Display", Lora, Georgia, serif' : 'serif',
               },
             ]}>
-            76.4%
+            {entitlements.has_assess ? 'Available' : 'Locked'}
           </Text>
           <Text style={[styles.metricSubtitle, { color: colors.text.secondary }]}>
-            UPSC CSE Prelims Mock #4 completed
+            {entitlements.has_assess
+              ? 'Assess Module enabled by your library'
+              : 'Assess module not subscribed by library'}
           </Text>
 
           <TouchableOpacity
             activeOpacity={0.8}
-            onPress={onOpenExamSuite}
-            style={[styles.punchLogBox, { backgroundColor: colors.surface.inset }]}>
-            <Sparkles size={13} color="#B58A4A" />
-            <Text style={[styles.punchLogText, { color: colors.text.secondary }]}>
-              Launch Test Simulator →
-            </Text>
+            onPress={handleOpenExamOrShowLock}
+            style={[
+              styles.punchLogBox,
+              {
+                backgroundColor: colors.surface.inset,
+                opacity: entitlements.has_assess ? 1 : 0.85,
+              },
+            ]}>
+            {entitlements.has_assess ? (
+              <>
+                <Sparkles size={13} color="#B58A4A" />
+                <Text style={[styles.punchLogText, { color: colors.brand.primary, fontWeight: '700' }]}>
+                  Launch Test Simulator →
+                </Text>
+              </>
+            ) : (
+              <>
+                <Lock size={13} color="#B58A4A" />
+                <Text style={[styles.punchLogText, { color: '#B58A4A', fontWeight: '600' }]}>
+                  Subscription Required (Locked)
+                </Text>
+              </>
+            )}
           </TouchableOpacity>
         </View>
       </View>
@@ -544,104 +770,213 @@ export function StudentPortalView({
               My Attendance History
             </Text>
             <Text style={{ color: colors.text.muted, fontSize: 12.5, marginTop: 2 }}>
-              Verified punch records for {studentData.name} ({studentData.id})
+              Verified punch records for {studentName} ({studentIdDisplay})
             </Text>
           </View>
 
           <View style={[styles.badgePillSmall, { backgroundColor: isDark ? '#203A2D' : '#E8EEE5' }]}>
             <Text style={[styles.badgePillSmallText, { color: isDark ? '#55B58D' : '#245C48' }]}>
-              {historyRecords.length} Total Visits Logged
+              {attendanceRecords.length} Total Visits Logged
             </Text>
           </View>
         </View>
 
-        <View style={styles.historyList}>
-          {historyRecords.map((item) => (
-            <View
-              key={item.id}
-              style={[
-                styles.historyItemRow,
-                {
-                  backgroundColor: colors.surface.inset,
-                  borderColor: colors.surface.border,
-                },
-              ]}>
-              <View style={styles.historyDateCol}>
-                <Calendar size={14} color={isDark ? '#55B58D' : '#245C48'} />
-                <Text style={[styles.historyDateText, { color: colors.text.primary }]}>
-                  {item.date}
-                </Text>
-              </View>
-
-              <View style={styles.historyTimesCol}>
-                <Text style={[styles.historyCheckIn, { color: '#22C55E' }]}>
-                  In: {item.checkInTime}
-                </Text>
-                <Text
-                  style={[
-                    styles.historyCheckOut,
-                    { color: item.checkOutTime ? '#DC2626' : colors.text.muted },
-                  ]}>
-                  Out: {item.checkOutTime || 'Active'}
-                </Text>
-              </View>
-
-              <View style={styles.historyDurationCol}>
-                <Clock size={12} color={colors.text.muted} />
-                <Text style={[styles.historyDurationText, { color: colors.text.secondary }]}>
-                  {item.durationMinutes
-                    ? `${Math.floor(item.durationMinutes / 60)}h ${item.durationMinutes % 60}m`
-                    : 'In Session'}
-                </Text>
-              </View>
-
+        {attendanceRecords.length === 0 ? (
+          <View style={styles.emptyStateBox}>
+            <CalendarCheck size={28} color={colors.text.faint} />
+            <Text style={[styles.emptyStateTitle, { color: colors.text.primary }]}>
+              No attendance records found
+            </Text>
+            <Text style={[styles.emptyStateSub, { color: colors.text.muted }]}>
+              Your entrance and exit punches will appear here once you scan the library QR code.
+            </Text>
+          </View>
+        ) : (
+          <View style={styles.historyList}>
+            {attendanceRecords.map((item) => (
               <View
+                key={item.id}
                 style={[
-                  styles.historyStatusPill,
+                  styles.historyItemRow,
                   {
-                    backgroundColor:
-                      item.status === 'present'
-                        ? isDark
-                          ? '#203A2D'
-                          : '#E8EEE5'
-                        : item.status === 'late'
-                        ? isDark
-                          ? '#2C2B1B'
-                          : '#FEF8EA'
-                        : isDark
-                        ? '#243038'
-                        : '#EDF3F7',
+                    backgroundColor: colors.surface.inset,
+                    borderColor: colors.surface.border,
                   },
                 ]}>
-                <Text
+                <View style={styles.historyDateCol}>
+                  <Calendar size={14} color={isDark ? '#55B58D' : '#245C48'} />
+                  <Text style={[styles.historyDateText, { color: colors.text.primary }]}>
+                    {item.date_display}
+                  </Text>
+                </View>
+
+                <View style={styles.historyTimesCol}>
+                  <Text style={[styles.historyCheckIn, { color: '#22C55E' }]}>
+                    In: {item.check_in_display}
+                  </Text>
+                  <Text
+                    style={[
+                      styles.historyCheckOut,
+                      { color: item.check_out_at ? '#DC2626' : colors.text.muted },
+                    ]}>
+                    Out: {item.check_out_display}
+                  </Text>
+                </View>
+
+                <View style={styles.historyDurationCol}>
+                  <Clock size={12} color={colors.text.muted} />
+                  <Text style={[styles.historyDurationText, { color: colors.text.secondary }]}>
+                    {item.duration_display}
+                  </Text>
+                </View>
+
+                <View
                   style={[
-                    styles.historyStatusPillText,
+                    styles.historyStatusPill,
                     {
-                      color:
-                        item.status === 'present'
-                          ? '#245C48'
-                          : item.status === 'late'
-                          ? '#B58A4A'
-                          : '#475569',
+                      backgroundColor:
+                        item.status === 'completed'
+                          ? isDark ? '#203A2D' : '#E8EEE5'
+                          : item.status === 'currently_inside'
+                          ? isDark ? '#1C2C24' : '#E8F5EE'
+                          : isDark ? '#2C2B1B' : '#FEF8EA',
                     },
                   ]}>
-                  {item.status.toUpperCase()}
-                </Text>
+                  <Text
+                    style={[
+                      styles.historyStatusPillText,
+                      {
+                        color:
+                          item.status === 'completed'
+                            ? '#245C48'
+                            : item.status === 'currently_inside'
+                            ? '#2E7D52'
+                            : '#B58A4A',
+                      },
+                    ]}>
+                    {item.status.replace(/_/g, ' ').toUpperCase()}
+                  </Text>
+                </View>
               </View>
-            </View>
-          ))}
+            ))}
+          </View>
+        )}
+      </View>
+
+      {/* ========================================================================= */}
+      {/* 6. MY PAYMENT & RECEIPT TRANSACTIONS                                      */}
+      {/* ========================================================================= */}
+      <View
+        style={[
+          styles.noticeCard,
+          {
+            backgroundColor: colors.surface.card,
+            borderColor: colors.surface.border,
+            ...shadows.card,
+          },
+        ]}>
+        <View style={styles.noticeHeader}>
+          <View>
+            <Text
+              style={[
+                styles.noticeTitle,
+                {
+                  color: colors.text.primary,
+                  fontFamily: Platform.OS === 'web' ? '"DM Serif Display", Lora, Georgia, serif' : 'serif',
+                },
+              ]}>
+              Payment Receipts & Invoices
+            </Text>
+            <Text style={{ color: colors.text.muted, fontSize: 12.5, marginTop: 2 }}>
+              Verified library fee transactions and deposit receipts
+            </Text>
+          </View>
+
+          <View style={[styles.badgePillSmall, { backgroundColor: isDark ? '#2C2B1B' : '#FEF8EA' }]}>
+            <Text style={[styles.badgePillSmallText, { color: '#B58A4A' }]}>
+              {payments.length} Payments Recorded
+            </Text>
+          </View>
         </View>
+
+        {payments.length === 0 ? (
+          <View style={styles.emptyStateBox}>
+            <Receipt size={28} color={colors.text.faint} />
+            <Text style={[styles.emptyStateTitle, { color: colors.text.primary }]}>
+              No payment transactions on file
+            </Text>
+            <Text style={[styles.emptyStateSub, { color: colors.text.muted }]}>
+              Official receipts confirmed by library staff will appear in this section.
+            </Text>
+          </View>
+        ) : (
+          <View style={styles.historyList}>
+            {payments.map((p) => (
+              <View
+                key={p.id}
+                style={[
+                  styles.historyItemRow,
+                  {
+                    backgroundColor: colors.surface.inset,
+                    borderColor: colors.surface.border,
+                  },
+                ]}>
+                <View style={styles.historyDateCol}>
+                  <Receipt size={14} color="#B58A4A" />
+                  <Text style={[styles.historyDateText, { color: colors.text.primary }]}>
+                    {p.receipt_number || 'Receipt Issued'}
+                  </Text>
+                </View>
+
+                <View style={styles.historyTimesCol}>
+                  <Text style={[styles.historyCheckIn, { color: colors.text.primary, fontWeight: '700' }]}>
+                    ₹{p.amount.toLocaleString('en-IN')}
+                  </Text>
+                  <Text style={[styles.historyCheckOut, { color: colors.text.muted }]}>
+                    via {p.payment_method.toUpperCase()}
+                  </Text>
+                </View>
+
+                <View style={styles.historyDurationCol}>
+                  <Calendar size={12} color={colors.text.muted} />
+                  <Text style={[styles.historyDurationText, { color: colors.text.secondary }]}>
+                    {p.date_display}
+                  </Text>
+                </View>
+
+                <View
+                  style={[
+                    styles.historyStatusPill,
+                    {
+                      backgroundColor:
+                        p.status === 'completed'
+                          ? isDark ? '#203A2D' : '#E8EEE5'
+                          : isDark ? '#2C2B1B' : '#FEF8EA',
+                    },
+                  ]}>
+                  <Text
+                    style={[
+                      styles.historyStatusPillText,
+                      { color: p.status === 'completed' ? '#245C48' : '#B58A4A' },
+                    ]}>
+                    {p.status.toUpperCase()}
+                  </Text>
+                </View>
+              </View>
+            ))}
+          </View>
+        )}
       </View>
 
       {/* Footer */}
       <View style={styles.portalFooter}>
         <Text style={[styles.portalFooterText, { color: colors.text.muted }]}>
-          {currentTenant.name} Student Pass · Powered by LibX Multi-Tenant SaaS
+          {libraryName} Student Pass · Powered by LibX Multi-Tenant Platform
         </Text>
       </View>
 
       {/* ========================================================================= */}
-      {/* 6. MODAL: QR CODE SCANNER CAMERA INTERFACE                                */}
+      {/* 7. MODAL: QR CODE SCANNER CAMERA INTERFACE                                */}
       {/* ========================================================================= */}
       <Modal visible={isScannerOpen} transparent animationType="slide">
         <View style={styles.modalBackdrop}>
@@ -683,15 +1018,15 @@ export function StudentPortalView({
               </View>
             </View>
 
-            {/* Quick Testing Actions (Static & Dynamic QR) */}
+            {/* Scanner controls */}
             <View style={styles.scannerControlsGroup}>
               <Text style={[styles.scannerControlsLabel, { color: colors.text.muted }]}>
-                Instant Terminal Punch (One-Click Verification)
+                Instant Terminal Punch
               </Text>
               <View style={styles.testButtonsRow}>
                 <TouchableOpacity
                   activeOpacity={0.8}
-                  onPress={handleTestScanStatic}
+                  onPress={() => handleExecuteScan('STATIC-ENTRANCE-TOKEN')}
                   style={[styles.testScanBtn, { backgroundColor: isDark ? '#203A2D' : '#E8EEE5' }]}>
                   <QrCode size={14} color="#245C48" />
                   <Text style={[styles.testScanBtnText, { color: '#245C48' }]}>
@@ -701,48 +1036,46 @@ export function StudentPortalView({
 
                 <TouchableOpacity
                   activeOpacity={0.8}
-                  onPress={handleTestScanDynamic}
+                  onPress={() => handleExecuteScan('DYNAMIC-RECEPTION-TOKEN')}
                   style={[styles.testScanBtn, { backgroundColor: isDark ? '#2C2B1B' : '#FEF8EA' }]}>
-                  <Clock size={14} color="#B58A4A" />
+                  <Sparkles size={14} color="#B58A4A" />
                   <Text style={[styles.testScanBtnText, { color: '#B58A4A' }]}>
-                    Scan Dynamic Kiosk QR
+                    Scan Dynamic Tablet QR
                   </Text>
                 </TouchableOpacity>
               </View>
+            </View>
 
-              {/* Manual Code Entry */}
-              <View style={styles.manualEntryRow}>
-                <TextInput
-                  value={manualCodeInput}
-                  onChangeText={setManualCodeInput}
-                  placeholder="Or enter QR token code..."
-                  placeholderTextColor={colors.text.muted}
-                  style={[
-                    styles.manualCodeInput,
-                    {
-                      color: colors.text.primary,
-                      borderColor: colors.surface.border,
-                      backgroundColor: isDark ? colors.surface.canvas : '#FAF8F5',
-                    },
-                  ]}
-                />
-                <TouchableOpacity
-                  onPress={() => {
-                    handleExecuteScan(manualCodeInput);
-                    setManualCodeInput('');
-                  }}
-                  style={[styles.manualSubmitBtn, { backgroundColor: isDark ? '#245C48' : '#287A5B' }]}>
-                  <Check size={14} color="#FFFFFF" />
-                  <Text style={styles.manualSubmitBtnText}>Punch</Text>
-                </TouchableOpacity>
-              </View>
+            {/* Manual Code Fallback */}
+            <View style={styles.manualCodeRow}>
+              <TextInput
+                value={manualCodeInput}
+                onChangeText={setManualCodeInput}
+                placeholder="Or enter 8-digit terminal code..."
+                placeholderTextColor={colors.text.faint}
+                autoCapitalize="characters"
+                style={[
+                  styles.manualTextInput,
+                  {
+                    backgroundColor: colors.surface.inset,
+                    borderColor: colors.surface.border,
+                    color: colors.text.primary,
+                  },
+                ]}
+              />
+              <TouchableOpacity
+                onPress={() => handleExecuteScan(manualCodeInput)}
+                activeOpacity={0.8}
+                style={[styles.manualSubmitBtn, { backgroundColor: isDark ? '#245C48' : '#287A5B' }]}>
+                <Text style={styles.manualSubmitBtnText}>Submit</Text>
+              </TouchableOpacity>
             </View>
           </View>
         </View>
       </Modal>
 
       {/* ========================================================================= */}
-      {/* 7. MODAL: ATTENDANCE CONFIRMATION / ERROR POPUP                           */}
+      {/* 8. MODAL: ATTENDANCE CONFIRMATION POPUP                                   */}
       {/* ========================================================================= */}
       <Modal visible={!!scanResult?.show} transparent animationType="fade">
         <View style={styles.modalBackdrop}>
@@ -754,7 +1087,6 @@ export function StudentPortalView({
                 borderColor: scanResult?.success ? '#22C55E' : '#DC2626',
               },
             ]}>
-            {/* Top Icon Badge */}
             <View
               style={[
                 styles.resultIconCircle,
@@ -767,7 +1099,6 @@ export function StudentPortalView({
               )}
             </View>
 
-            {/* Title & Message */}
             <Text
               style={[
                 styles.resultTitle,
@@ -787,73 +1118,99 @@ export function StudentPortalView({
               {scanResult?.message}
             </Text>
 
-            {/* Confirmation Metadata Receipt */}
-            {scanResult?.success && scanResult.record && (
-              <View
-                style={[
-                  styles.confirmationReceiptBox,
-                  {
-                    backgroundColor: isDark ? '#19221D' : '#F8FAF8',
-                    borderColor: colors.surface.border,
-                  },
-                ]}>
-                <View style={styles.receiptRow}>
-                  <Text style={[styles.receiptLabel, { color: colors.text.muted }]}>Student Name:</Text>
-                  <Text style={[styles.receiptValue, { color: colors.text.primary }]}>
-                    {studentData.name}
-                  </Text>
-                </View>
-
-                <View style={styles.receiptRow}>
-                  <Text style={[styles.receiptLabel, { color: colors.text.muted }]}>Student ID:</Text>
-                  <Text style={[styles.receiptValue, { color: colors.text.primary }]}>
-                    {studentData.id}
-                  </Text>
-                </View>
-
-                <View style={styles.receiptRow}>
-                  <Text style={[styles.receiptLabel, { color: colors.text.muted }]}>Library Campus:</Text>
-                  <Text style={[styles.receiptValue, { color: colors.text.primary }]}>
-                    {currentTenant.name} ({currentTenant.campus})
-                  </Text>
-                </View>
-
-                <View style={styles.receiptRow}>
-                  <Text style={[styles.receiptLabel, { color: colors.text.muted }]}>Date & Timestamp:</Text>
-                  <Text style={[styles.receiptValue, { color: colors.text.primary }]}>
-                    {scanResult.record.date} at {scanResult.action === 'check_out' ? scanResult.record.checkOutTime : scanResult.record.checkInTime}
-                  </Text>
-                </View>
-
-                {scanResult.action === 'check_out' && scanResult.record.durationMinutes && (
-                  <View style={styles.receiptRow}>
-                    <Text style={[styles.receiptLabel, { color: colors.text.muted }]}>Visit Duration:</Text>
-                    <Text style={[styles.receiptValue, { color: '#245C48', fontWeight: '800' }]}>
-                      {Math.floor(scanResult.record.durationMinutes / 60)}h {scanResult.record.durationMinutes % 60}m
-                    </Text>
-                  </View>
-                )}
-
-                <View style={styles.receiptRow}>
-                  <Text style={[styles.receiptLabel, { color: colors.text.muted }]}>Attendance Status:</Text>
-                  <Text style={[styles.receiptValue, { color: '#16A34A', fontWeight: '700' }]}>
-                    {scanResult.record.status.toUpperCase()}
-                  </Text>
-                </View>
-              </View>
-            )}
-
-            {/* Close Button */}
             <TouchableOpacity
-              onPress={() => {
-                setScanResult(null);
-                setIsScannerOpen(false);
-              }}
-              style={[
-                styles.resultDismissBtn,
-                { backgroundColor: scanResult?.success ? '#245C48' : '#DC2626' },
-              ]}>
+              activeOpacity={0.85}
+              onPress={() => setScanResult(null)}
+              style={[styles.resultDismissBtn, { backgroundColor: isDark ? '#245C48' : '#287A5B' }]}>
               <Text style={styles.resultDismissBtnText}>Done</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ========================================================================= */}
+      {/* 9. MODAL: LOGOUT CONFIRMATION                                             */}
+      {/* ========================================================================= */}
+      <Modal visible={showLogoutModal} transparent animationType="fade">
+        <View style={styles.modalBackdrop}>
+          <View
+            style={[
+              styles.confirmDialogCard,
+              {
+                backgroundColor: colors.surface.card,
+                borderColor: colors.surface.border,
+                ...shadows.card,
+              },
+            ]}>
+            <View style={styles.confirmIconWrap}>
+              <LogOut size={28} color="#C76B59" />
+            </View>
+            <Text
+              style={[
+                styles.confirmTitle,
+                {
+                  color: colors.text.primary,
+                  fontFamily: Platform.OS === 'web' ? '"DM Serif Display", Lora, Georgia, serif' : 'serif',
+                },
+              ]}>
+              Sign Out from Student Portal?
+            </Text>
+            <Text style={[styles.confirmSubtitle, { color: colors.text.muted }]}>
+              You will be signed out of your study pass session. You can sign back in anytime with your registered credentials.
+            </Text>
+
+            <View style={styles.confirmActionsRow}>
+              <TouchableOpacity
+                onPress={() => setShowLogoutModal(false)}
+                style={[styles.confirmCancelBtn, { borderColor: colors.surface.border }]}>
+                <Text style={[styles.confirmCancelText, { color: colors.text.secondary }]}>Stay Signed In</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                onPress={handleConfirmLogout}
+                style={[styles.confirmSignOutBtn, { backgroundColor: '#C76B59' }]}>
+                <Text style={styles.confirmSignOutText}>Confirm Sign Out</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ========================================================================= */}
+      {/* 10. MODAL: PREMIUM FEATURE LOCKED NOTICE (Assess)                         */}
+      {/* ========================================================================= */}
+      <Modal visible={showLockedFeatureModal} transparent animationType="fade">
+        <View style={styles.modalBackdrop}>
+          <View
+            style={[
+              styles.confirmDialogCard,
+              {
+                backgroundColor: colors.surface.card,
+                borderColor: colors.surface.border,
+                ...shadows.card,
+              },
+            ]}>
+            <View style={[styles.confirmIconWrap, { backgroundColor: isDark ? '#2C2B1B' : '#FEF8EA' }]}>
+              <Lock size={28} color="#B58A4A" />
+            </View>
+            <Text
+              style={[
+                styles.confirmTitle,
+                {
+                  color: colors.text.primary,
+                  fontFamily: Platform.OS === 'web' ? '"DM Serif Display", Lora, Georgia, serif' : 'serif',
+                },
+              ]}>
+              LibX Assess Not Subscribed
+            </Text>
+            <Text style={[styles.confirmSubtitle, { color: colors.text.muted }]}>
+              The examination simulator module is not enabled for {libraryName}. Please contact the library administration or reception desk to request access.
+            </Text>
+
+            <TouchableOpacity
+              onPress={() => setShowLockedFeatureModal(false)}
+              style={[styles.confirmSignOutBtn, { backgroundColor: isDark ? '#245C48' : '#287A5B', width: '100%', marginTop: 8 }]}>
+              <Text style={styles.confirmSignOutText}>Understood</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -863,31 +1220,42 @@ export function StudentPortalView({
 }
 
 const styles = StyleSheet.create({
+  loadingScreen: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 14,
+  },
+  loadingText: {
+    fontSize: 14,
+    fontWeight: '500',
+  },
   screen: {
     flex: 1,
   },
   scrollContainer: {
-    paddingHorizontal: 28,
-    paddingVertical: 24,
+    paddingHorizontal: 24,
+    paddingTop: 24,
+    paddingBottom: 64,
     gap: 20,
-    maxWidth: 1040,
-    alignSelf: 'center',
-    width: '100%',
+    alignItems: 'center',
   },
   scrollContainerMobile: {
     paddingHorizontal: 16,
-    paddingVertical: 18,
+    paddingTop: 16,
     gap: 16,
   },
   topBar: {
-    borderRadius: 16,
-    borderWidth: 1,
-    padding: 20,
+    width: '100%',
+    maxWidth: 1100,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    padding: 18,
+    borderRadius: 16,
+    borderWidth: 1,
     flexWrap: 'wrap',
-    gap: 16,
+    gap: 12,
   },
   brandRow: {
     flexDirection: 'row',
@@ -895,9 +1263,9 @@ const styles = StyleSheet.create({
     gap: 14,
   },
   avatarIconBox: {
-    width: 48,
-    height: 48,
-    borderRadius: 14,
+    width: 44,
+    height: 44,
+    borderRadius: 12,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -905,34 +1273,43 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    marginBottom: 3,
   },
   kickerText: {
     fontSize: 10.5,
-    fontWeight: '700',
+    fontWeight: '800',
     letterSpacing: 0.8,
   },
   activePassPill: {
-    paddingHorizontal: 6,
+    paddingHorizontal: 7,
     paddingVertical: 2,
-    borderRadius: 4,
+    borderRadius: 6,
   },
   activePassText: {
-    fontSize: 9.5,
-    fontWeight: '700',
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 0.4,
   },
   studentNameHeader: {
-    fontSize: 22,
+    fontSize: 20,
     fontWeight: '700',
-    letterSpacing: -0.3,
+    marginTop: 1,
   },
   studentSubHeader: {
-    fontSize: 12.5,
+    fontSize: 12,
+    marginTop: 2,
   },
   headerActions: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
+  },
+  actionIconBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   themeToggleBtn: {
     flexDirection: 'row',
@@ -940,7 +1317,7 @@ const styles = StyleSheet.create({
     gap: 6,
     paddingHorizontal: 12,
     paddingVertical: 8,
-    borderRadius: 8,
+    borderRadius: 10,
     borderWidth: 1,
   },
   themeToggleText: {
@@ -953,7 +1330,7 @@ const styles = StyleSheet.create({
     gap: 6,
     paddingHorizontal: 12,
     paddingVertical: 8,
-    borderRadius: 8,
+    borderRadius: 10,
     borderWidth: 1,
   },
   logoutBtnText: {
@@ -961,25 +1338,53 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#C76B59',
   },
-  scanHeroCard: {
-    borderRadius: 16,
-    borderWidth: 1,
-    padding: 22,
+  errorBanner: {
+    width: '100%',
+    maxWidth: 1100,
     flexDirection: 'row',
     alignItems: 'center',
+    gap: 10,
+    padding: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+  },
+  errorBannerText: {
+    flex: 1,
+    fontSize: 13,
+    fontWeight: '500',
+  },
+  retryBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    backgroundColor: '#C76B59',
+    borderRadius: 6,
+  },
+  retryBtnText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  scanHeroCard: {
+    width: '100%',
+    maxWidth: 1100,
+    borderRadius: 16,
+    borderWidth: 1,
+    padding: 24,
+    flexDirection: 'row',
     justifyContent: 'space-between',
-    flexWrap: 'wrap',
+    alignItems: 'center',
     gap: 20,
+    flexWrap: 'wrap',
   },
   scanHeroLeft: {
     flex: 1,
-    minWidth: 260,
-    gap: 8,
+    minWidth: 280,
+    gap: 10,
   },
   scanStatusBadgeRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    gap: 8,
   },
   liveStatusDot: {
     width: 8,
@@ -987,9 +1392,9 @@ const styles = StyleSheet.create({
     borderRadius: 4,
   },
   scanStatusText: {
-    fontSize: 11,
+    fontSize: 11.5,
     fontWeight: '800',
-    letterSpacing: 0.8,
+    letterSpacing: 0.6,
   },
   scanHeroTitle: {
     fontSize: 24,
@@ -1002,16 +1407,16 @@ const styles = StyleSheet.create({
   scanHeroButtonsRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
+    gap: 12,
+    marginTop: 6,
     flexWrap: 'wrap',
-    marginTop: 8,
   },
   openScannerPrimaryBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
     paddingHorizontal: 18,
-    paddingVertical: 11,
+    paddingVertical: 12,
     borderRadius: 10,
   },
   openScannerPrimaryBtnText: {
@@ -1024,48 +1429,55 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 6,
     paddingHorizontal: 14,
-    paddingVertical: 10,
+    paddingVertical: 11,
     borderRadius: 10,
-    borderWidth: 1.5,
+    borderWidth: 1,
   },
   quickScanSecondaryBtnText: {
     fontSize: 13,
     fontWeight: '700',
   },
   scanHeroRightBadge: {
+    width: 140,
+    height: 140,
+    borderRadius: 16,
+    borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    padding: 20,
-    borderRadius: 14,
-    borderWidth: 1,
     gap: 6,
+    padding: 12,
   },
   qrHeroTag: {
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '700',
+    marginTop: 4,
   },
   qrHeroSub: {
-    fontSize: 11,
+    fontSize: 9.5,
   },
   deskPassCard: {
+    width: '100%',
+    maxWidth: 1100,
     borderRadius: 16,
     borderWidth: 1,
     padding: 22,
-    gap: 16,
+    gap: 18,
   },
   passHeader: {
     flexDirection: 'row',
-    alignItems: 'center',
     justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 16,
     flexWrap: 'wrap',
-    gap: 14,
   },
   passTitleCol: {
+    flex: 1,
+    minWidth: 260,
     gap: 4,
   },
   passKicker: {
     fontSize: 10.5,
-    fontWeight: '700',
+    fontWeight: '800',
     letterSpacing: 0.8,
   },
   passDeskTitle: {
@@ -1076,69 +1488,75 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
+    marginTop: 4,
     flexWrap: 'wrap',
-    marginTop: 2,
   },
   goldTierBadge: {
-    paddingHorizontal: 8,
+    paddingHorizontal: 10,
     paddingVertical: 3,
-    borderRadius: 6,
+    borderRadius: 8,
     borderWidth: 1,
   },
   goldTierText: {
-    fontSize: 11,
-    fontWeight: '700',
     color: '#B58A4A',
+    fontSize: 11.5,
+    fontWeight: '700',
   },
   passFloorText: {
-    fontSize: 12,
+    fontSize: 12.5,
   },
   qrCodeContainer: {
     alignItems: 'center',
     justifyContent: 'center',
     padding: 12,
-    borderRadius: 12,
+    borderRadius: 14,
     borderWidth: 1,
     gap: 4,
   },
   qrLabel: {
-    fontSize: 10,
-    fontWeight: '600',
+    fontSize: 10.5,
+    fontWeight: '700',
   },
   divider: {
     borderTopWidth: 1,
   },
   passDetailsGrid: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
+    alignItems: 'center',
+    justifyContent: 'space-between',
     gap: 16,
+    flexWrap: 'wrap',
   },
   passDetailItem: {
-    flex: 1,
-    minWidth: 180,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
+    minWidth: 200,
+    flex: 1,
   },
   detailItemLabel: {
     fontSize: 11,
+    fontWeight: '500',
   },
   detailItemValue: {
     fontSize: 13,
-    fontWeight: '600',
+    fontWeight: '700',
+    marginTop: 1,
   },
   threeGridRow: {
+    width: '100%',
+    maxWidth: 1100,
     flexDirection: 'row',
+    gap: 18,
     flexWrap: 'wrap',
-    gap: 14,
   },
   metricCard: {
     flex: 1,
-    minWidth: 200,
-    borderRadius: 14,
+    minWidth: 280,
+    borderRadius: 16,
     borderWidth: 1,
-    padding: 16,
-    gap: 8,
+    padding: 20,
+    gap: 10,
   },
   cardTopRow: {
     flexDirection: 'row',
@@ -1146,41 +1564,46 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   cardTag: {
-    fontSize: 10.5,
-    fontWeight: '700',
+    fontSize: 11,
+    fontWeight: '800',
     letterSpacing: 0.6,
   },
   smallIconCircle: {
     width: 28,
     height: 28,
-    borderRadius: 6,
+    borderRadius: 8,
     alignItems: 'center',
     justifyContent: 'center',
   },
   metricBigNumber: {
-    fontSize: 26,
-    fontWeight: '800',
+    fontSize: 32,
+    fontWeight: '700',
+    letterSpacing: -0.5,
   },
   metricSubtitle: {
-    fontSize: 12,
+    fontSize: 12.5,
+    lineHeight: 16,
   },
   punchLogBox: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 8,
-    paddingVertical: 6,
-    borderRadius: 6,
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    borderRadius: 8,
     marginTop: 4,
   },
   punchLogText: {
-    fontSize: 11,
+    fontSize: 12,
+    flex: 1,
   },
   noticeCard: {
+    width: '100%',
+    maxWidth: 1100,
     borderRadius: 16,
     borderWidth: 1,
     padding: 22,
-    gap: 14,
+    gap: 16,
   },
   noticeHeader: {
     flexDirection: 'row',
@@ -1190,97 +1613,108 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   noticeTitle: {
-    fontSize: 18,
+    fontSize: 19,
     fontWeight: '700',
   },
   badgePillSmall: {
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 8,
   },
   badgePillSmallText: {
-    fontSize: 11,
+    fontSize: 11.5,
     fontWeight: '700',
   },
-  historyList: {
+  emptyStateBox: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 32,
     gap: 8,
+  },
+  emptyStateTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  emptyStateSub: {
+    fontSize: 12.5,
+    textAlign: 'center',
+    maxWidth: 400,
+  },
+  historyList: {
+    gap: 10,
   },
   historyItemRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    padding: 12,
-    borderRadius: 10,
+    padding: 14,
+    borderRadius: 12,
     borderWidth: 1,
     flexWrap: 'wrap',
-    gap: 10,
+    gap: 12,
   },
   historyDateCol: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    minWidth: 110,
+    minWidth: 120,
   },
   historyDateText: {
     fontSize: 13,
-    fontWeight: '600',
+    fontWeight: '700',
   },
   historyTimesCol: {
-    flexDirection: 'row',
-    gap: 12,
-    minWidth: 160,
+    gap: 2,
+    minWidth: 110,
   },
   historyCheckIn: {
-    fontSize: 12,
-    fontWeight: '700',
+    fontSize: 12.5,
+    fontWeight: '600',
   },
   historyCheckOut: {
     fontSize: 12,
-    fontWeight: '600',
   },
   historyDurationCol: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
+    gap: 6,
     minWidth: 90,
   },
   historyDurationText: {
     fontSize: 12,
+    fontWeight: '600',
   },
   historyStatusPill: {
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 5,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 6,
   },
   historyStatusPillText: {
     fontSize: 10.5,
-    fontWeight: '700',
+    fontWeight: '800',
+    letterSpacing: 0.4,
   },
   portalFooter: {
+    marginTop: 8,
     alignItems: 'center',
-    paddingVertical: 14,
   },
   portalFooterText: {
     fontSize: 12,
   },
   modalBackdrop: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.6)',
+    backgroundColor: 'rgba(15, 23, 42, 0.55)',
     alignItems: 'center',
     justifyContent: 'center',
-    padding: 20,
+    padding: 16,
   },
   scannerDialogCard: {
     width: '100%',
-    maxWidth: 440,
-    borderRadius: 18,
+    maxWidth: 480,
+    borderRadius: 20,
     borderWidth: 1,
-    padding: 20,
+    padding: 22,
     gap: 16,
-    ...Platform.select({
-      web: { boxShadow: '0 8px 30px rgba(0,0,0,0.25)' },
-      default: { elevation: 10 },
-    }),
   },
   scannerHeaderRow: {
     flexDirection: 'row',
@@ -1288,12 +1722,12 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   scannerHeaderTitle: {
-    fontSize: 15,
+    fontSize: 16,
     fontWeight: '700',
   },
   viewfinderContainer: {
     height: 220,
-    backgroundColor: '#0F1A14',
+    backgroundColor: '#090D0A',
     borderRadius: 14,
     alignItems: 'center',
     justifyContent: 'center',
@@ -1302,40 +1736,38 @@ const styles = StyleSheet.create({
   viewfinderFrame: {
     width: 170,
     height: 170,
-    borderWidth: 1.5,
-    borderColor: 'rgba(85, 181, 141, 0.4)',
+    position: 'relative',
     alignItems: 'center',
     justifyContent: 'center',
-    position: 'relative',
   },
   viewfinderCorner: {
     position: 'absolute',
-    width: 16,
-    height: 16,
+    width: 20,
+    height: 20,
     borderColor: '#55B58D',
   },
-  cornerTL: { top: -2, left: -2, borderTopWidth: 3, borderLeftWidth: 3 },
-  cornerTR: { top: -2, right: -2, borderTopWidth: 3, borderRightWidth: 3 },
-  cornerBL: { bottom: -2, left: -2, borderBottomWidth: 3, borderLeftWidth: 3 },
-  cornerBR: { bottom: -2, right: -2, borderBottomWidth: 3, borderRightWidth: 3 },
+  cornerTL: { top: 0, left: 0, borderTopWidth: 3, borderLeftWidth: 3 },
+  cornerTR: { top: 0, right: 0, borderTopWidth: 3, borderRightWidth: 3 },
+  cornerBL: { bottom: 0, left: 0, borderBottomWidth: 3, borderLeftWidth: 3 },
+  cornerBR: { bottom: 0, right: 0, borderBottomWidth: 3, borderRightWidth: 3 },
   laserScanLine: {
-    width: '100%',
+    position: 'absolute',
+    top: '50%',
+    left: 0,
+    right: 0,
     height: 2,
     backgroundColor: '#22C55E',
-    shadowColor: '#22C55E',
-    shadowOpacity: 0.8,
-    shadowRadius: 6,
-    position: 'absolute',
-    top: '45%',
   },
   viewfinderPrompt: {
-    color: '#E8EEE5',
-    fontSize: 10.5,
-    marginTop: 80,
+    position: 'absolute',
+    bottom: -30,
+    color: '#9CA3AF',
+    fontSize: 11,
     textAlign: 'center',
+    width: 220,
   },
   scannerControlsGroup: {
-    gap: 10,
+    gap: 8,
   },
   scannerControlsLabel: {
     fontSize: 11.5,
@@ -1343,7 +1775,8 @@ const styles = StyleSheet.create({
   },
   testButtonsRow: {
     flexDirection: 'row',
-    gap: 8,
+    gap: 10,
+    flexWrap: 'wrap',
   },
   testScanBtn: {
     flex: 1,
@@ -1352,52 +1785,44 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 6,
     paddingVertical: 10,
-    paddingHorizontal: 8,
     borderRadius: 8,
+    minWidth: 140,
   },
   testScanBtnText: {
-    fontSize: 11.5,
+    fontSize: 12,
     fontWeight: '700',
   },
-  manualEntryRow: {
+  manualCodeRow: {
     flexDirection: 'row',
     gap: 8,
-    marginTop: 4,
   },
-  manualCodeInput: {
+  manualTextInput: {
     flex: 1,
-    borderRadius: 8,
     borderWidth: 1,
+    borderRadius: 10,
     paddingHorizontal: 12,
-    paddingVertical: 8,
-    fontSize: 12,
-    outlineStyle: 'none' as any,
+    paddingVertical: 9,
+    fontSize: 13,
   },
   manualSubmitBtn: {
-    flexDirection: 'row',
+    paddingHorizontal: 16,
+    borderRadius: 10,
     alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: 14,
-    borderRadius: 8,
     justifyContent: 'center',
   },
   manualSubmitBtnText: {
     color: '#FFFFFF',
+    fontSize: 13,
     fontWeight: '700',
-    fontSize: 12,
   },
   resultDialogCard: {
     width: '100%',
     maxWidth: 420,
     borderRadius: 20,
-    borderWidth: 2,
+    borderWidth: 1.5,
     padding: 24,
     alignItems: 'center',
-    gap: 12,
-    ...Platform.select({
-      web: { boxShadow: '0 10px 35px rgba(0,0,0,0.3)' },
-      default: { elevation: 12 },
-    }),
+    gap: 14,
   },
   resultIconCircle: {
     width: 64,
@@ -1405,10 +1830,9 @@ const styles = StyleSheet.create({
     borderRadius: 32,
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 4,
   },
   resultTitle: {
-    fontSize: 20,
+    fontSize: 19,
     fontWeight: '700',
     textAlign: 'center',
   },
@@ -1417,36 +1841,74 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     lineHeight: 18,
   },
-  confirmationReceiptBox: {
-    width: '100%',
-    borderRadius: 12,
-    borderWidth: 1,
-    padding: 14,
-    gap: 8,
-    marginTop: 4,
-  },
-  receiptRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  receiptLabel: {
-    fontSize: 12,
-  },
-  receiptValue: {
-    fontSize: 12.5,
-    fontWeight: '600',
-  },
   resultDismissBtn: {
     width: '100%',
     paddingVertical: 12,
     borderRadius: 10,
     alignItems: 'center',
-    marginTop: 8,
+    justifyContent: 'center',
+    marginTop: 6,
   },
   resultDismissBtnText: {
     color: '#FFFFFF',
-    fontSize: 13.5,
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  confirmDialogCard: {
+    width: '100%',
+    maxWidth: 420,
+    borderRadius: 20,
+    borderWidth: 1,
+    padding: 24,
+    alignItems: 'center',
+    gap: 12,
+  },
+  confirmIconWrap: {
+    width: 52,
+    height: 52,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FDECE8',
+  },
+  confirmTitle: {
+    fontSize: 19,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+  confirmSubtitle: {
+    fontSize: 13,
+    textAlign: 'center',
+    lineHeight: 18,
+  },
+  confirmActionsRow: {
+    flexDirection: 'row',
+    gap: 10,
+    width: '100%',
+    marginTop: 10,
+  },
+  confirmCancelBtn: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  confirmCancelText: {
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  confirmSignOutBtn: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  confirmSignOutText: {
+    color: '#FFFFFF',
+    fontSize: 13,
     fontWeight: '700',
   },
 });

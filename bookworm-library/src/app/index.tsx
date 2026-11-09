@@ -63,17 +63,29 @@ export default function AdminDashboardScreen() {
   const [isMarkAttendanceOpen, setIsMarkAttendanceOpen] = useState(false);
 
   const { colors, isDark } = useThemeMode();
-  const { adminProfile, isLoading: isAuthLoading, signOut } = useAuth();
+  const { adminProfile, studentProfile, isLoading: isAuthLoading, signOut } = useAuth();
 
   useEffect(() => {
-    if (adminProfile && authScreen !== 'student-login' && authScreen !== 'student-dashboard') {
+    if (adminProfile) {
       setAuthScreen('admin-dashboard');
-    } else if (!adminProfile && authScreen === 'admin-dashboard') {
-      setAuthScreen('selection');
+    } else if (studentProfile) {
+      setAuthScreen('student-dashboard');
+    } else if (!isAuthLoading) {
+      if (authScreen === 'admin-dashboard' || authScreen === 'student-dashboard') {
+        setAuthScreen('selection');
+      }
     }
-  }, [adminProfile]);
+  }, [adminProfile, studentProfile, isAuthLoading]);
 
   const handleAdminLogout = async () => {
+    try {
+      await signOut();
+    } finally {
+      setAuthScreen('selection');
+    }
+  };
+
+  const handleStudentLogout = async () => {
     try {
       await signOut();
     } finally {
@@ -164,9 +176,9 @@ export default function AdminDashboardScreen() {
         style={[styles.safeArea, { backgroundColor: colors.surface.canvas }]}
         edges={['top', 'left', 'right', 'bottom']}>
         <StudentPortalView
-          studentData={loggedInStudent}
+          studentData={studentProfile || loggedInStudent}
           currentTenant={currentTenant}
-          onLogout={() => setAuthScreen('selection')}
+          onLogout={handleStudentLogout}
           onOpenExamSuite={() => {
             setAuthScreen('admin-dashboard');
             setCurrentRoute('exam-suite');

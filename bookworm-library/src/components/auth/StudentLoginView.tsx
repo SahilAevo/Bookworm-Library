@@ -9,10 +9,10 @@ import {
   Platform,
   ScrollView,
   ActivityIndicator,
+  Modal,
 } from 'react-native';
 import {
   GraduationCap,
-  BookOpen,
   ArrowLeft,
   User,
   Lock,
@@ -23,13 +23,18 @@ import {
   Sun,
   Moon,
   Sparkles,
-  Info,
   LogIn,
   KeyRound,
+  Mail,
+  X,
+  CheckCircle2,
+  ShieldAlert,
+  Clock,
 } from 'lucide-react-native';
 import { useThemeMode } from '@/context/ThemeContext';
 import { ClaymorphicShadows, ClaymorphicShadowsDark } from '@/constants/dashboard-theme';
 import { LibraryTenant, DEFAULT_TENANT } from '@/constants/tenants';
+import { useAuth } from '@/context/AuthContext';
 
 interface StudentLoginViewProps {
   tenant?: LibraryTenant;
@@ -47,52 +52,100 @@ export function StudentLoginView({
   const shadows = isDark ? ClaymorphicShadowsDark : ClaymorphicShadows;
   const isMobile = width < 768;
 
+  const { signInStudent, resetPasswordForEmail } = useAuth();
+
   // Form states
-  const [studentId, setStudentId] = useState(`${tenant.studentIdPrefix}-0014`);
+  const [identifier, setIdentifier] = useState('rohan.student.bw2026@gmail.com');
   const [password, setPassword] = useState('Student@2026');
   const [showPassword, setShowPassword] = useState(false);
   const [rememberMe, setRememberMe] = useState(true);
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [showForgotModal, setShowForgotModal] = useState(false);
+  const [errorType, setErrorType] = useState<string | null>(null);
 
-  const handleLogin = () => {
+  // Forgot password modal states
+  const [isForgotModalVisible, setIsForgotModalVisible] = useState(false);
+  const [resetEmail, setResetEmail] = useState('');
+  const [isResetLoading, setIsResetLoading] = useState(false);
+  const [resetSuccessMessage, setResetSuccessMessage] = useState<string | null>(null);
+  const [resetErrorMessage, setResetErrorMessage] = useState<string | null>(null);
+
+  const handleLogin = async () => {
     setErrorMessage(null);
-    if (!studentId.trim()) {
+    setErrorType(null);
+
+    const cleanIdentifier = identifier.trim();
+    const cleanPassword = password.trim();
+
+    if (!cleanIdentifier) {
       setErrorMessage('Please enter your Student ID or registered email.');
       return;
     }
-    if (!password.trim()) {
+    if (!cleanPassword) {
       setErrorMessage('Please enter your student password.');
+      return;
+    }
+    if (cleanPassword.length < 6) {
+      setErrorMessage('Password must contain at least 6 characters.');
       return;
     }
 
     setIsLoading(true);
-    setTimeout(() => {
+    try {
+      const result = await signInStudent(cleanIdentifier, cleanPassword);
+
+      if (!result.success) {
+        setErrorMessage(result.error || 'Authentication failed. Please try again.');
+        setErrorType(result.errorType || null);
+      } else {
+        onLoginSuccess(result.student);
+      }
+    } catch (err: any) {
+      setErrorMessage(err?.message || 'An unexpected connection error occurred.');
+    } finally {
       setIsLoading(false);
-      onLoginSuccess({
-        id: studentId,
-        name: 'Rohan Verma',
-        desk: 'Desk D-01 (Exclusive)',
-        shift: 'Morning Shift (06:00 AM - 02:00 PM)',
-      });
-    }, 550);
+    }
   };
 
   const handleQuickDemo = () => {
-    setStudentId('BW-2026-0014');
+    setIdentifier('rohan.student.bw2026@gmail.com');
     setPassword('Student@2026');
     setErrorMessage(null);
-    setIsLoading(true);
-    setTimeout(() => {
-      setIsLoading(false);
-      onLoginSuccess({
-        id: 'BW-2026-0014',
-        name: 'Rohan Verma',
-        desk: 'Desk D-01 (Exclusive)',
-        shift: 'Morning Shift (06:00 AM - 02:00 PM)',
-      });
-    }, 450);
+    setErrorType(null);
+  };
+
+  const handleOpenForgotModal = () => {
+    setResetEmail(identifier.includes('@') ? identifier.trim() : '');
+    setResetSuccessMessage(null);
+    setResetErrorMessage(null);
+    setIsForgotModalVisible(true);
+  };
+
+  const handleSendPasswordReset = async () => {
+    setResetErrorMessage(null);
+    setResetSuccessMessage(null);
+
+    const cleanEmail = resetEmail.trim();
+    if (!cleanEmail || !cleanEmail.includes('@')) {
+      setResetErrorMessage('Please enter a valid registered email address.');
+      return;
+    }
+
+    setIsResetLoading(true);
+    try {
+      const res = await resetPasswordForEmail(cleanEmail);
+      if (res.success) {
+        setResetSuccessMessage(
+          'Password reset instructions have been dispatched to your email. Please check your inbox and spam folder.'
+        );
+      } else {
+        setResetErrorMessage(res.error || 'Failed to request password reset.');
+      }
+    } catch (err: any) {
+      setResetErrorMessage(err?.message || 'Failed to dispatch password reset.');
+    } finally {
+      setIsResetLoading(false);
+    }
   };
 
   return (
@@ -167,7 +220,7 @@ export function StudentLoginView({
           <View style={[styles.iconWrap, { backgroundColor: isDark ? '#2C2B1B' : '#FEF8EA' }]}>
             <GraduationCap size={26} color="#B58A4A" strokeWidth={2.2} />
           </View>
-          <View>
+          <View style={{ flex: 1 }}>
             <Text
               style={[
                 styles.titleText,
@@ -179,7 +232,7 @@ export function StudentLoginView({
               Student Login
             </Text>
             <Text style={[styles.subText, { color: colors.text.muted }]}>
-              Sign in to access {tenant.name} desk pass
+              Sign in to access {tenant.name} study pass & portal
             </Text>
           </View>
         </View>
@@ -198,7 +251,7 @@ export function StudentLoginView({
           <View style={styles.demoBannerLeft}>
             <Sparkles size={14} color="#B58A4A" />
             <Text style={[styles.demoBannerText, { color: colors.text.primary }]}>
-              Demo: <Text style={{ fontWeight: '700' }}>Rohan Verma</Text>
+              Demo Account: <Text style={{ fontWeight: '700' }}>rohan.student.bw2026@gmail.com</Text>
             </Text>
           </View>
           <Text style={[styles.demoBannerAction, { color: '#B58A4A' }]}>
@@ -206,20 +259,37 @@ export function StudentLoginView({
           </Text>
         </TouchableOpacity>
 
-        {/* Error Notification */}
+        {/* Error Notification Banners with categorized styling */}
         {errorMessage && (
-          <View style={[styles.errorBox, { backgroundColor: isDark ? '#3D2020' : '#FDECE8', borderColor: '#C76B59' }]}>
-            <AlertCircle size={16} color="#C76B59" />
-            <Text style={styles.errorText}>{errorMessage}</Text>
-          </View>
-        )}
-
-        {/* Forgot Password Notice */}
-        {showForgotModal && (
-          <View style={[styles.infoBox, { backgroundColor: isDark ? '#2C2B1B' : '#FEF8EA', borderColor: '#B58A4A' }]}>
-            <AlertCircle size={16} color="#B58A4A" />
-            <Text style={[styles.infoText, { color: colors.text.primary }]}>
-              Contact the reception desk to reset your password.
+          <View
+            style={[
+              styles.errorBox,
+              {
+                backgroundColor:
+                  errorType === 'pending_review'
+                    ? isDark ? '#2B281B' : '#FEF8EA'
+                    : isDark ? '#3D2020' : '#FDECE8',
+                borderColor: errorType === 'pending_review' ? '#B58A4A' : '#C76B59',
+              },
+            ]}>
+            {errorType === 'pending_review' ? (
+              <Clock size={16} color="#B58A4A" />
+            ) : errorType === 'membership_inactive' || errorType === 'membership_suspended' ? (
+              <ShieldAlert size={16} color="#C76B59" />
+            ) : (
+              <AlertCircle size={16} color="#C76B59" />
+            )}
+            <Text
+              style={[
+                styles.errorText,
+                {
+                  color:
+                    errorType === 'pending_review'
+                      ? isDark ? '#F4D389' : '#8A5D18'
+                      : isDark ? '#FF9E9E' : '#A83226',
+                },
+              ]}>
+              {errorMessage}
             </Text>
           </View>
         )}
@@ -229,7 +299,7 @@ export function StudentLoginView({
           {/* Student ID / Registered Email */}
           <View style={styles.fieldItem}>
             <Text style={[styles.fieldLabel, { color: colors.text.secondary }]}>
-              Student ID or Email
+              Student Email or ID
             </Text>
             <View
               style={[
@@ -241,11 +311,15 @@ export function StudentLoginView({
               ]}>
               <User size={16} color={colors.text.muted} />
               <TextInput
-                value={studentId}
-                onChangeText={setStudentId}
-                placeholder="e.g. BW-2026-0014"
+                value={identifier}
+                onChangeText={(val) => {
+                  setIdentifier(val);
+                  if (errorMessage) setErrorMessage(null);
+                }}
+                placeholder="e.g. rohan@gmail.com or BW-2026-0014"
                 placeholderTextColor={colors.text.faint}
                 autoCapitalize="none"
+                keyboardType="email-address"
                 style={[styles.inputField, { color: colors.text.primary }]}
               />
             </View>
@@ -267,10 +341,14 @@ export function StudentLoginView({
               <Lock size={16} color={colors.text.muted} />
               <TextInput
                 value={password}
-                onChangeText={setPassword}
-                placeholder="Enter password"
+                onChangeText={(val) => {
+                  setPassword(val);
+                  if (errorMessage) setErrorMessage(null);
+                }}
+                placeholder="Enter your password"
                 placeholderTextColor={colors.text.faint}
                 secureTextEntry={!showPassword}
+                onSubmitEditing={handleLogin}
                 style={[styles.inputField, { color: colors.text.primary }]}
               />
               <TouchableOpacity
@@ -285,7 +363,7 @@ export function StudentLoginView({
             </View>
           </View>
 
-          {/* Options Row */}
+          {/* Options Row: Remember Me & Forgot Password */}
           <View style={styles.optionsRow}>
             <TouchableOpacity
               activeOpacity={0.8}
@@ -302,44 +380,188 @@ export function StudentLoginView({
                 {rememberMe && <Check size={12} color="#FFFFFF" strokeWidth={3} />}
               </View>
               <Text style={[styles.checkboxLabel, { color: colors.text.secondary }]}>
-                Remember me
+                Remember credentials
               </Text>
             </TouchableOpacity>
 
             <TouchableOpacity
-              onPress={() => setShowForgotModal(!showForgotModal)}
-              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+              activeOpacity={0.7}
+              onPress={handleOpenForgotModal}>
               <Text style={[styles.forgotText, { color: colors.brand.primary }]}>
                 Forgot password?
               </Text>
             </TouchableOpacity>
           </View>
+
+          {/* Submit Button */}
+          <TouchableOpacity
+            onPress={handleLogin}
+            disabled={isLoading}
+            activeOpacity={0.85}
+            style={[
+              styles.submitBtn,
+              {
+                backgroundColor: isDark ? '#245C48' : '#287A5B',
+                opacity: isLoading ? 0.75 : 1,
+              },
+            ]}>
+            {isLoading ? (
+              <ActivityIndicator size="small" color="#FFFFFF" />
+            ) : (
+              <>
+                <LogIn size={16} color="#FFFFFF" strokeWidth={2.4} />
+                <Text style={styles.submitBtnText}>Sign In to Student Portal</Text>
+              </>
+            )}
+          </TouchableOpacity>
         </View>
 
-        {/* Submit Button */}
-        <TouchableOpacity
-          activeOpacity={0.85}
-          disabled={isLoading}
-          onPress={handleLogin}
-          style={[
-            styles.submitBtn,
-            {
-              backgroundColor: isDark ? '#203A2D' : '#245C48',
-              borderColor: isDark ? '#55B58D' : '#245C48',
-              borderWidth: 1,
-              ...shadows.button,
-            },
-          ]}>
-          {isLoading ? (
-            <ActivityIndicator size="small" color="#FFFFFF" />
-          ) : (
-            <>
-              <Text style={styles.submitBtnText}>Sign In</Text>
-              <LogIn size={16} color="#FFFFFF" strokeWidth={2.2} />
-            </>
-          )}
-        </TouchableOpacity>
+        {/* Footer info note */}
+        <View style={[styles.cardFooter, { borderTopColor: colors.surface.border }]}>
+          <Text style={[styles.footerText, { color: colors.text.muted }]}>
+            Need a new library admission or password reset?
+          </Text>
+          <TouchableOpacity
+            onPress={onBackToOptions}
+            activeOpacity={0.7}
+            style={styles.switchLinkBtn}>
+            <Text style={[styles.switchLinkText, { color: colors.brand.primary }]}>
+              Contact Reception Desk →
+            </Text>
+          </TouchableOpacity>
+        </View>
       </View>
+
+      {/* ========================================================================= */}
+      {/* 3. MODAL: REAL PASSWORD RESET FLOW                                        */}
+      {/* ========================================================================= */}
+      <Modal visible={isForgotModalVisible} transparent animationType="fade">
+        <View style={styles.modalBackdrop}>
+          <View
+            style={[
+              styles.resetDialogCard,
+              {
+                backgroundColor: colors.surface.card,
+                borderColor: colors.surface.border,
+                ...shadows.card,
+              },
+            ]}>
+            {/* Header */}
+            <View style={styles.resetHeaderRow}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                <View style={[styles.resetIconWrap, { backgroundColor: isDark ? '#2C2B1B' : '#FEF8EA' }]}>
+                  <KeyRound size={20} color="#B58A4A" strokeWidth={2.2} />
+                </View>
+                <View>
+                  <Text
+                    style={[
+                      styles.resetTitle,
+                      {
+                        color: colors.text.primary,
+                        fontFamily: Platform.OS === 'web' ? '"DM Serif Display", Lora, Georgia, serif' : 'serif',
+                      },
+                    ]}>
+                    Reset Student Password
+                  </Text>
+                  <Text style={[styles.resetSubtitle, { color: colors.text.muted }]}>
+                    Receive password recovery instructions
+                  </Text>
+                </View>
+              </View>
+              <TouchableOpacity
+                onPress={() => setIsForgotModalVisible(false)}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                <X size={20} color={colors.text.muted} />
+              </TouchableOpacity>
+            </View>
+
+            {/* Success Banner */}
+            {resetSuccessMessage && (
+              <View style={[styles.successBox, { backgroundColor: isDark ? '#1C2C24' : '#E8F5EE', borderColor: '#2E7D52' }]}>
+                <CheckCircle2 size={16} color="#2E7D52" />
+                <Text style={[styles.successText, { color: isDark ? '#6BD69E' : '#1D623F' }]}>
+                  {resetSuccessMessage}
+                </Text>
+              </View>
+            )}
+
+            {/* Error Banner */}
+            {resetErrorMessage && (
+              <View style={[styles.errorBox, { backgroundColor: isDark ? '#3D2020' : '#FDECE8', borderColor: '#C76B59' }]}>
+                <AlertCircle size={16} color="#C76B59" />
+                <Text style={[styles.errorText, { color: isDark ? '#FF9E9E' : '#A83226' }]}>
+                  {resetErrorMessage}
+                </Text>
+              </View>
+            )}
+
+            {/* Input Form */}
+            {!resetSuccessMessage ? (
+              <View style={{ gap: 14, marginTop: 12 }}>
+                <Text style={{ fontSize: 13, color: colors.text.secondary, lineHeight: 18 }}>
+                  Enter the email address registered with your student admission profile. We will dispatch a secure reset link.
+                </Text>
+
+                <View
+                  style={[
+                    styles.inputBox,
+                    {
+                      backgroundColor: colors.surface.inset,
+                      borderColor: colors.surface.border,
+                    },
+                  ]}>
+                  <Mail size={16} color={colors.text.muted} />
+                  <TextInput
+                    value={resetEmail}
+                    onChangeText={(val) => {
+                      setResetEmail(val);
+                      if (resetErrorMessage) setResetErrorMessage(null);
+                    }}
+                    placeholder="student@example.com"
+                    placeholderTextColor={colors.text.faint}
+                    autoCapitalize="none"
+                    keyboardType="email-address"
+                    style={[styles.inputField, { color: colors.text.primary }]}
+                  />
+                </View>
+
+                <View style={styles.dialogActionsRow}>
+                  <TouchableOpacity
+                    onPress={() => setIsForgotModalVisible(false)}
+                    style={[styles.dialogCancelBtn, { borderColor: colors.surface.border }]}>
+                    <Text style={[styles.dialogCancelText, { color: colors.text.secondary }]}>Cancel</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    onPress={handleSendPasswordReset}
+                    disabled={isResetLoading}
+                    style={[
+                      styles.dialogSubmitBtn,
+                      {
+                        backgroundColor: isDark ? '#245C48' : '#287A5B',
+                        opacity: isResetLoading ? 0.75 : 1,
+                      },
+                    ]}>
+                    {isResetLoading ? (
+                      <ActivityIndicator size="small" color="#FFFFFF" />
+                    ) : (
+                      <Text style={styles.dialogSubmitText}>Send Reset Link</Text>
+                    )}
+                  </TouchableOpacity>
+                </View>
+              </View>
+            ) : (
+              <View style={{ marginTop: 16 }}>
+                <TouchableOpacity
+                  onPress={() => setIsForgotModalVisible(false)}
+                  style={[styles.dialogSubmitBtn, { backgroundColor: isDark ? '#245C48' : '#287A5B', width: '100%' }]}>
+                  <Text style={styles.dialogSubmitText}>Close</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+          </View>
+        </View>
+      </Modal>
     </ScrollView>
   );
 }
@@ -350,18 +572,17 @@ const styles = StyleSheet.create({
   },
   scrollContainer: {
     paddingHorizontal: 24,
-    paddingVertical: 28,
+    paddingTop: 24,
+    paddingBottom: 48,
     alignItems: 'center',
-    justifyContent: 'center',
-    minHeight: '100%',
   },
   scrollContainerMobile: {
     paddingHorizontal: 16,
-    paddingVertical: 18,
+    paddingTop: 16,
   },
   topNavRow: {
     width: '100%',
-    maxWidth: 520,
+    maxWidth: 440,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
@@ -373,11 +594,11 @@ const styles = StyleSheet.create({
     gap: 8,
     paddingHorizontal: 14,
     paddingVertical: 8,
-    borderRadius: 8,
+    borderRadius: 10,
     borderWidth: 1,
   },
   backBtnText: {
-    fontSize: 12.5,
+    fontSize: 13,
     fontWeight: '600',
   },
   themeToggleBtn: {
@@ -385,84 +606,50 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 6,
     paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 8,
+    paddingVertical: 8,
+    borderRadius: 10,
     borderWidth: 1,
   },
   themeToggleText: {
-    fontSize: 12,
+    fontSize: 12.5,
     fontWeight: '600',
   },
   loginCard: {
     width: '100%',
-    maxWidth: 520,
+    maxWidth: 440,
     borderRadius: 18,
     borderWidth: 1,
-    padding: 28,
+    padding: 26,
     gap: 20,
   },
   cardHeader: {
     flexDirection: 'row',
-    alignItems: 'flex-start',
+    alignItems: 'center',
     gap: 14,
   },
   iconWrap: {
     width: 48,
     height: 48,
-    borderRadius: 12,
+    borderRadius: 14,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  kickerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginBottom: 4,
-  },
-  kickerText: {
-    fontSize: 10.5,
-    fontWeight: '700',
-    letterSpacing: 0.8,
-  },
-  studentPill: {
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 4,
-  },
-  studentPillText: {
-    fontSize: 9.5,
-    fontWeight: '700',
-    color: '#B58A4A',
-  },
   titleText: {
-    fontSize: 24,
+    fontSize: 22,
     fontWeight: '700',
     letterSpacing: -0.3,
   },
   subText: {
-    fontSize: 13,
-    marginTop: 3,
-    lineHeight: 18,
-  },
-  libraryNoticeBox: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 10,
-    padding: 14,
-    borderRadius: 10,
-    borderWidth: 1,
-  },
-  libraryNoticeText: {
     fontSize: 12.5,
-    lineHeight: 18,
-    flex: 1,
+    marginTop: 2,
+    lineHeight: 16,
   },
   demoBanner: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 14,
-    paddingVertical: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
     borderRadius: 10,
     borderWidth: 1,
   },
@@ -470,40 +657,46 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
+    flex: 1,
   },
   demoBannerText: {
-    fontSize: 12.5,
+    fontSize: 12,
   },
   demoBannerAction: {
     fontSize: 12,
     fontWeight: '700',
+    marginLeft: 8,
   },
   errorBox: {
     flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    padding: 12,
+    alignItems: 'flex-start',
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
     borderRadius: 8,
     borderWidth: 1,
   },
   errorText: {
-    color: '#C76B59',
-    fontSize: 12.5,
-    fontWeight: '600',
-    flex: 1,
-  },
-  infoBox: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 10,
-    padding: 12,
-    borderRadius: 8,
-    borderWidth: 1,
-  },
-  infoText: {
     fontSize: 12,
     lineHeight: 16,
     flex: 1,
+    fontWeight: '500',
+  },
+  successBox: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    marginTop: 10,
+  },
+  successText: {
+    fontSize: 12,
+    lineHeight: 16,
+    flex: 1,
+    fontWeight: '500',
   },
   formGroup: {
     gap: 16,
@@ -562,6 +755,7 @@ const styles = StyleSheet.create({
     gap: 8,
     paddingVertical: 14,
     borderRadius: 12,
+    marginTop: 4,
   },
   submitBtnText: {
     color: '#FFFFFF',
@@ -578,14 +772,78 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
   },
   footerText: {
-    fontSize: 12.5,
+    fontSize: 12,
   },
   switchLinkBtn: {
     paddingVertical: 2,
   },
   switchLinkText: {
-    fontSize: 12.5,
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.55)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 16,
+  },
+  resetDialogCard: {
+    width: '100%',
+    maxWidth: 440,
+    borderRadius: 18,
+    borderWidth: 1,
+    padding: 24,
+    gap: 12,
+  },
+  resetHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 4,
+  },
+  resetIconWrap: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  resetTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+  },
+  resetSubtitle: {
+    fontSize: 12,
+    marginTop: 2,
+  },
+  dialogActionsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    gap: 10,
+    marginTop: 8,
+  },
+  dialogCancelBtn: {
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+  },
+  dialogCancelText: {
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  dialogSubmitBtn: {
+    paddingHorizontal: 18,
+    paddingVertical: 10,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  dialogSubmitText: {
+    color: '#FFFFFF',
+    fontSize: 13,
     fontWeight: '700',
   },
 });
-
