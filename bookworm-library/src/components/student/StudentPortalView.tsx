@@ -59,6 +59,8 @@ import {
   StudentPaymentSummary,
   LibraryEntitlements,
 } from '@/services/student-portal-service';
+import { attendanceService, AttendanceRecord, StudentAttendanceContext } from '@/services/attendance-service';
+import { CameraView, useCameraPermissions } from 'expo-camera';
 
 interface StudentPortalViewProps {
   studentData?: any;
@@ -111,7 +113,7 @@ export function StudentPortalView({
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
 
-  // Scanner modal states
+  // Scanner modal states & Expo Camera integration
   const [isScannerOpen, setIsScannerOpen] = useState(false);
   const [manualCodeInput, setManualCodeInput] = useState('');
   const [scanResult, setScanResult] = useState<{
@@ -120,6 +122,13 @@ export function StudentPortalView({
     message: string;
     action?: 'check_in' | 'check_out';
   } | null>(null);
+
+  const [attendanceContext, setAttendanceContext] = useState<StudentAttendanceContext | null>(null);
+  const [attendanceBusy, setAttendanceBusy] = useState(false);
+  const [attendanceError, setAttendanceError] = useState('');
+  const [selectedSeatId, setSelectedSeatId] = useState<string | undefined>();
+  const [cameraPermission, requestCameraPermission] = useCameraPermissions();
+  const [scannerEnabled, setScannerEnabled] = useState(true);
 
   // Logout Confirmation Modal
   const [showLogoutModal, setShowLogoutModal] = useState(false);
@@ -156,6 +165,15 @@ export function StudentPortalView({
       const pay = await studentPortalService.getPaymentHistory(studentDbId, sub?.due_amount || 0);
       setPayments(pay.payments);
       setPaymentSummary(pay.summary);
+
+      // 6. Fetch live attendance context for QR scanning
+      try {
+        const ctx = await attendanceService.getStudentContext();
+        setAttendanceContext(ctx);
+        setAttendanceError(ctx.eligible ? '' : ctx.message || 'Attendance is unavailable.');
+      } catch (ctxErr: any) {
+        console.warn('Could not load attendance context:', ctxErr?.message);
+      }
     } catch (err: any) {
       console.error('Failed to load student portal database records:', err);
       setLoadError(err?.message || 'Failed to retrieve your student records.');
@@ -183,23 +201,34 @@ export function StudentPortalView({
   // Check if student currently has active check-in
   const activeCheckIn = attendanceStats.current_visit;
 
-  // Real-time scan simulation or execution
-  const handleExecuteScan = (payload: string) => {
-    if (!payload.trim()) return;
-    setIsScannerOpen(false);
+  // Real-time scan execution via attendanceService
+  const handleExecuteScan = async (payload: string) => {
+    if (!payload.trim() || attendanceBusy) return;
+    setAttendanceBusy(true);
+    setAttendanceError('');
 
-    // In a live integration, calls attendance scanner backend
-    const isCheckingOut = Boolean(activeCheckIn);
-    setScanResult({
-      show: true,
-      success: true,
-      message: isCheckingOut
-        ? 'Departure successfully logged. Your study session duration has been recorded.'
-        : 'Attendance punch successfully registered at Library Main Entrance turnstile.',
-      action: isCheckingOut ? 'check_out' : 'check_in',
-    });
-
-    handleRefresh();
+    try {
+      const result = await attendanceService.scan(payload, selectedSeatId);
+      setScanResult({
+        show: true,
+        success: true,
+        message: result.action === 'check_in'
+          ? 'Attendance punch successfully registered at library turnstile.'
+          : 'Departure successfully logged. Your study session has been recorded.',
+        action: result.action,
+      });
+      setManualCodeInput('');
+      setSelectedSeatId(undefined);
+      await loadPortalData();
+    } catch (error: any) {
+      setScanResult({
+        show: true,
+        success: false,
+        message: error.message || 'Attendance scan could not be recorded.',
+      });
+    } finally {
+      setAttendanceBusy(false);
+    }
   };
 
   const handleOpenExamOrShowLock = () => {
@@ -454,6 +483,7 @@ export function StudentPortalView({
           <Text style={[styles.qrHeroSub, { color: colors.text.muted }]}>Connected to Supabase</Text>
         </View>
       </View>
+      {!!attendanceError && <Text accessibilityRole="alert" style={{ color: '#C76B59', paddingHorizontal: 8, fontSize: 13 }}>{attendanceError}</Text>}
 
       {/* ========================================================================= */}
       {/* 3. DIGITAL SEAT PASS CARD (Respects Seating Mode strictly)                */}
@@ -976,7 +1006,7 @@ export function StudentPortalView({
       </View>
 
       {/* ========================================================================= */}
-      {/* 7. MODAL: QR CODE SCANNER CAMERA INTERFACE                                */}
+      {/* 7. MODAL: QR CODE SCANNER CAMERA INTERFACE (With Expo Camera)             */}
       {/* ========================================================================= */}
       <Modal visible={isScannerOpen} transparent animationType="slide">
         <View style={styles.modalBackdrop}>
@@ -1001,74 +1031,88 @@ export function StudentPortalView({
               </TouchableOpacity>
             </View>
 
-            {/* Simulated Live Viewfinder */}
-            <View style={styles.viewfinderContainer}>
-              <View style={styles.viewfinderFrame}>
-                <View style={[styles.viewfinderCorner, styles.cornerTL]} />
-                <View style={[styles.viewfinderCorner, styles.cornerTR]} />
-                <View style={[styles.viewfinderCorner, styles.cornerBL]} />
-                <View style={[styles.viewfinderCorner, styles.cornerBR]} />
-
-                {/* Animated Laser Scanning Line */}
-                <View style={styles.laserScanLine} />
-
-                <Text style={styles.viewfinderPrompt}>
-                  Align Library QR Code within the frame
+            {/* Live Camera Viewfinder or Permission Request */}
+            {cameraPermission?.granted ? (
+              <CameraView
+                style={styles.viewfinderContainer}
+                facing="back"
+                barcodeScannerSettings={{ barcodeTypes: ['qr'] }}
+                onBarcodeScanned={
+                  scannerEnabled
+                    ? ({ data }: any) => {
+                        setScannerEnabled(false);
+                        void handleExecuteScan(data);
+                      }
+                    : undefined
+                }
+              />
+            ) : (
+              <View style={[styles.viewfinderContainer, { padding: 20 }]}>
+                <Text style={{ color: '#E8EEE5', textAlign: 'center' }}>
+                  {cameraPermission?.canAskAgain === false
+                    ? 'Camera access is disabled. Enable it in device settings or enter the QR token below.'
+                    : 'Allow camera access to scan the library attendance QR.'}
                 </Text>
+                <TouchableOpacity
+                  onPress={() => void requestCameraPermission()}
+                  style={[styles.manualSubmitBtn, { backgroundColor: '#287A5B', padding: 10, marginTop: 14 }]}>
+                  <Text style={styles.manualSubmitBtnText}>Allow camera</Text>
+                </TouchableOpacity>
               </View>
-            </View>
+            )}
 
-            {/* Scanner controls */}
+            {/* Seat Selection if required by branch seating mode */}
+            {attendanceContext?.requires_seat && (
+              <View style={styles.scannerControlsGroup}>
+                <Text style={[styles.scannerControlsLabel, { color: colors.text.primary }]}>Choose an available seat</Text>
+                <View style={styles.testButtonsRow}>
+                  {attendanceContext.seats.map((seat) => (
+                    <TouchableOpacity
+                      key={seat.id}
+                      onPress={() => setSelectedSeatId(seat.id)}
+                      style={[styles.testScanBtn, { backgroundColor: selectedSeatId === seat.id ? '#287A5B' : '#E8EEE5' }]}>
+                      <Text style={{ color: selectedSeatId === seat.id ? '#FFF' : '#245C48', fontWeight: '700' }}>
+                        {seat.seat_number}
+                        {seat.status === 'assigned' ? ' · Assigned' : ''}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                  {attendanceContext.seats.length === 0 && (
+                    <Text style={{ color: colors.text.muted }}>No seats are currently available.</Text>
+                  )}
+                </View>
+              </View>
+            )}
+
+            {/* Manual token entry remains available when camera access is unavailable */}
             <View style={styles.scannerControlsGroup}>
               <Text style={[styles.scannerControlsLabel, { color: colors.text.muted }]}>
-                Instant Terminal Punch
+                Scan the library QR or enter its token
               </Text>
-              <View style={styles.testButtonsRow}>
+              <View style={styles.manualCodeRow}>
+                <TextInput
+                  value={manualCodeInput}
+                  onChangeText={setManualCodeInput}
+                  placeholder="Or enter QR token code..."
+                  placeholderTextColor={colors.text.muted}
+                  style={[
+                    styles.manualTextInput,
+                    {
+                      color: colors.text.primary,
+                      borderColor: colors.surface.border,
+                      backgroundColor: isDark ? colors.surface.canvas : '#FAF8F5',
+                    },
+                  ]}
+                />
                 <TouchableOpacity
-                  activeOpacity={0.8}
-                  onPress={() => handleExecuteScan('STATIC-ENTRANCE-TOKEN')}
-                  style={[styles.testScanBtn, { backgroundColor: isDark ? '#203A2D' : '#E8EEE5' }]}>
-                  <QrCode size={14} color="#245C48" />
-                  <Text style={[styles.testScanBtnText, { color: '#245C48' }]}>
-                    Scan Static Entrance QR
-                  </Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  activeOpacity={0.8}
-                  onPress={() => handleExecuteScan('DYNAMIC-RECEPTION-TOKEN')}
-                  style={[styles.testScanBtn, { backgroundColor: isDark ? '#2C2B1B' : '#FEF8EA' }]}>
-                  <Sparkles size={14} color="#B58A4A" />
-                  <Text style={[styles.testScanBtnText, { color: '#B58A4A' }]}>
-                    Scan Dynamic Tablet QR
-                  </Text>
+                  onPress={() => {
+                    void handleExecuteScan(manualCodeInput);
+                  }}
+                  style={[styles.manualSubmitBtn, { backgroundColor: isDark ? '#245C48' : '#287A5B' }]}>
+                  <Check size={14} color="#FFFFFF" />
+                  <Text style={styles.manualSubmitBtnText}>{attendanceBusy ? 'Checking…' : 'Submit'}</Text>
                 </TouchableOpacity>
               </View>
-            </View>
-
-            {/* Manual Code Fallback */}
-            <View style={styles.manualCodeRow}>
-              <TextInput
-                value={manualCodeInput}
-                onChangeText={setManualCodeInput}
-                placeholder="Or enter 8-digit terminal code..."
-                placeholderTextColor={colors.text.faint}
-                autoCapitalize="characters"
-                style={[
-                  styles.manualTextInput,
-                  {
-                    backgroundColor: colors.surface.inset,
-                    borderColor: colors.surface.border,
-                    color: colors.text.primary,
-                  },
-                ]}
-              />
-              <TouchableOpacity
-                onPress={() => handleExecuteScan(manualCodeInput)}
-                activeOpacity={0.8}
-                style={[styles.manualSubmitBtn, { backgroundColor: isDark ? '#245C48' : '#287A5B' }]}>
-                <Text style={styles.manualSubmitBtnText}>Submit</Text>
-              </TouchableOpacity>
             </View>
           </View>
         </View>
@@ -1120,8 +1164,15 @@ export function StudentPortalView({
 
             <TouchableOpacity
               activeOpacity={0.85}
-              onPress={() => setScanResult(null)}
-              style={[styles.resultDismissBtn, { backgroundColor: isDark ? '#245C48' : '#287A5B' }]}>
+              onPress={() => {
+                setScanResult(null);
+                setIsScannerOpen(false);
+                setScannerEnabled(true);
+              }}
+              style={[
+                styles.resultDismissBtn,
+                { backgroundColor: scanResult?.success ? '#245C48' : '#DC2626' },
+              ]}>
               <Text style={styles.resultDismissBtnText}>Done</Text>
             </TouchableOpacity>
           </View>
@@ -1733,39 +1784,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     overflow: 'hidden',
   },
-  viewfinderFrame: {
-    width: 170,
-    height: 170,
-    position: 'relative',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  viewfinderCorner: {
-    position: 'absolute',
-    width: 20,
-    height: 20,
-    borderColor: '#55B58D',
-  },
-  cornerTL: { top: 0, left: 0, borderTopWidth: 3, borderLeftWidth: 3 },
-  cornerTR: { top: 0, right: 0, borderTopWidth: 3, borderRightWidth: 3 },
-  cornerBL: { bottom: 0, left: 0, borderBottomWidth: 3, borderLeftWidth: 3 },
-  cornerBR: { bottom: 0, right: 0, borderBottomWidth: 3, borderRightWidth: 3 },
-  laserScanLine: {
-    position: 'absolute',
-    top: '50%',
-    left: 0,
-    right: 0,
-    height: 2,
-    backgroundColor: '#22C55E',
-  },
-  viewfinderPrompt: {
-    position: 'absolute',
-    bottom: -30,
-    color: '#9CA3AF',
-    fontSize: 11,
-    textAlign: 'center',
-    width: 220,
-  },
   scannerControlsGroup: {
     gap: 8,
   },
@@ -1787,10 +1805,6 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     borderRadius: 8,
     minWidth: 140,
-  },
-  testScanBtnText: {
-    fontSize: 12,
-    fontWeight: '700',
   },
   manualCodeRow: {
     flexDirection: 'row',
