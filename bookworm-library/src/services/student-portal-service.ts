@@ -594,3 +594,4 @@ class StudentPortalService {
 }
 
 export const studentPortalService = new StudentPortalService();
+
